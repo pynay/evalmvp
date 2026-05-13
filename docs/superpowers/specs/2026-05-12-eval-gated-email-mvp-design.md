@@ -1,8 +1,10 @@
 # Eval-Gated Email Generation MVP — System Spec
 
-**Status:** Design v1
-**Source:** `handoff.md` (initial commit 829090f)
+**Status:** Design v2 (Convex edition)
+**Source:** `handoff.md` + v1 spec (commit `6dbb60f`, Supabase edition — preserved in git history for reference)
 **Date:** 2026-05-12
+
+> **What changed from v1:** Stack pivoted from Supabase + Drizzle + Inngest to Convex (database + auth + workflow). Drops Docker for local dev. Tenant isolation moves from Postgres RLS to app-level discipline via a `withWorkspace` helper. Genericness judge gains a positive direction (similarity to human corpus) on top of the existing distance-from-bad measure.
 
 ---
 
@@ -20,13 +22,13 @@ A web app that generates cold emails one prospect at a time, scores every draft 
 
 ## 2. End-to-end flow
 
-1. User signs up → creates workspace
-2. Connects Gmail or Outlook via OAuth → becomes a `sender`
+1. User signs up via Google OAuth or magic link → workspace auto-created
+2. Connects Gmail or Outlook send-OAuth → becomes a `sender`
 3. Defines ICP (industry, role keywords, company size, geo, exclusions, value prop, threshold)
 4. Pastes 5–10 replied-to emails as voice samples
 5. Uploads prospect CSV
 6. For each prospect: enrich → generate → score (3 judges in parallel) → blend → regenerate if below threshold (max 3) → queue for approval (or flag for manual review if still below)
-7. User reviews approval table with per-email score breakdown and evidence highlights
+7. User reviews approval table with per-email score breakdown and evidence highlights (reactive — new scores appear without page refresh)
 8. Approved emails send through the user's mailbox with drip + jitter rate limiting
 
 ---
@@ -34,47 +36,66 @@ A web app that generates cold emails one prospect at a time, scores every draft 
 ## 3. Architecture
 
 ```
-┌──────────────────┐      ┌────────────────────────────────────────┐
-│  Next.js (App    │      │  Supabase (Postgres + pgvector + Auth) │
-│  Router + API)   │◄────►│  - RLS scoped by workspace_id          │
-│  on Vercel       │      │  - pgcrypto for token encryption       │
-└────────┬─────────┘      └────────────────────────────────────────┘
-         │
-         │ enqueue
-         ▼
-┌──────────────────────────────────────────────────────────────────┐
-│  Inngest (event-driven workflow)                                 │
-│                                                                  │
-│   prospect.uploaded ──► enrich.prospect ──► generate.draft       │
-│                                                  │               │
-│                                                  ▼               │
-│                                          score.fanout            │
-│                                          ├─ judge.ai_detect      │
-│                                          ├─ judge.generic        │
-│                                          └─ judge.personalize    │
-│                                                  │               │
-│                                                  ▼               │
-│                                          evaluate.blend          │
-│                                              │       │           │
-│                                       below  │       │  pass     │
-│                                              ▼       ▼           │
-│                                       regenerate    queue        │
-│                                       (≤3)          for approval │
-│                                                                  │
-│   approval.granted ──► send.email (Gmail / MS Graph)             │
-└──────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│  Next.js (App Router) on Vercel                          │
+│  - RSC + server actions                                  │
+│  - useQuery() for reactive approval UI                   │
+└─────────────────────────────┬────────────────────────────┘
+                              │ Convex client SDK (typed)
+                              ▼
+┌──────────────────────────────────────────────────────────┐
+│  Convex (cloud-hosted; no Docker)                        │
+│                                                          │
+│  Data layer:                                             │
+│   - 8 collections, indexed by workspaceId                │
+│   - vector indexes on emailCorpus.embedding_{opener,     │
+│     body, cta} for the Genericness judge                 │
+│                                                          │
+│  Auth: Convex Auth (Google OAuth + magic link)           │
+│                                                          │
+│  Functions:                                              │
+│   - queries (reads, reactive to clients)                 │
+│   - mutations (writes, atomic)                           │
+│   - actions (external I/O: LLMs, Apify, Gmail, Stripe)   │
+│   - scheduledFunctions (cron + delayed invocations)      │
+│                                                          │
+│  Eval pipeline (action chains):                          │
+│   prospect.uploaded                                      │
+│     → enrichProspect (action, Apify)                     │
+│     → generateDraft (action, Anthropic)                  │
+│     → scoreAll (action, runs 3 judges via Promise.all)   │
+│     → evaluateBlend (mutation)                           │
+│        ├─ below threshold + retry < 3 → re-enqueue       │
+│        ├─ below threshold + retry == 3 → flag            │
+│        └─ above → status='needs_review'                  │
+│                                                          │
+│  Send pipeline:                                          │
+│   onApproval(generationId)                               │
+│     → scheduledFunction (drip with jitter)               │
+│     → sendEmail (action: Gmail/Graph + record send row)  │
+└──────────────────────────────────────────────────────────┘
 
 External:
   - Anthropic (Sonnet 4.6 generation, Haiku 4.5 judges)
   - OpenAI (text-embedding-3-small)
   - Apify (LinkedIn enrichment)
-  - Stripe (Checkout + webhook)
+  - Stripe (Checkout + webhook via Convex httpAction)
   - Sentry, PostHog
 ```
 
-**Why Inngest.** Fan-out for the 3 parallel judge calls is the load-bearing reason. Built-in retries, concurrency control per sender (for rate limiting), and step-level observability replace ~200 lines of bespoke queue code.
+**Why Convex over the v1 stack.**
+- One vendor for DB + auth + workflow + functions; no Docker for local dev (`npx convex dev`).
+- Reactive queries make the approval table update automatically when scores land — no Realtime subscription plumbing.
+- End-to-end typed RPC between Next.js client and Convex functions.
 
-**Tenant isolation.** Every table that holds tenant data carries `workspace_id`. Postgres RLS policies enforce that authenticated users only see their own workspace's rows. Service-role key is used only inside Inngest functions and server actions; never exposed to the client.
+**What we give up vs v1.**
+- **Tenant isolation is now app-level**, not database-enforced. Single missed filter in a query = silent cross-workspace data leak. Mitigation: every query/mutation/action goes through the `withWorkspace` helper; lint rule + code review.
+- **No durable workflow steps.** If an action dies mid-loop, it retries from the start. Mitigation: idempotency keys on side effects; checkpoint state in the DB between stages so resumption is cheap.
+- **No concurrency keys for rate-limited sends.** Implement manually via a `sender_locks` table.
+- **No SQL escape hatch.** Analytics queries (calibration drift, approval rate per ICP) require either materialized aggregations in Convex or shipping to PostHog/Metabase. Accepted; revisit post-launch if it bites.
+- **Vector search is approximate top-K from full set, filtered after.** Over-fetch and filter in app code; for our 3,500-row corpus this is fine.
+
+**Multi-tenancy.** Every collection except `emailCorpus` carries `workspaceId`. The `withWorkspace(ctx, cb)` helper resolves the current user, looks up their workspace, and passes it to the callback. Direct `ctx.db.query()` calls outside this helper are banned by lint rule.
 
 ---
 
@@ -82,115 +103,244 @@ External:
 
 | Layer | Choice | Notes |
 |---|---|---|
-| Frontend + API | Next.js 15 (App Router) on Vercel | Server actions for mutations |
-| DB + Auth | Supabase (Postgres 15 + pgvector + Auth) | Google OAuth primary |
-| Workflow | Inngest | Cloud-hosted, signed webhooks |
+| Frontend + API | Next.js 15 (App Router) on Vercel | Server actions for mutations that don't need reactivity |
+| Database + Auth + Workflow | Convex | Cloud-hosted; `npx convex dev` for local |
+| Auth provider | Convex Auth | Google OAuth + magic link |
 | Generation | Claude Sonnet 4.6 | Prompt caching on voice samples + ICP |
 | Judges | Claude Haiku 4.5 | Three independent calls in parallel |
 | Embeddings | OpenAI `text-embedding-3-small` | 1536 dim |
-| Email send | Gmail API + Microsoft Graph | OAuth per sender |
-| Enrichment | Apify (`dev_fusion/linkedin-profile-scraper`) | Cached 90d |
-| Billing | Stripe Checkout + webhook | Two tiers |
+| Email send | Gmail API + Microsoft Graph | OAuth per sender, called from Convex actions |
+| Enrichment | Apify (`dev_fusion/linkedin-profile-scraper`) | Cached 90d in `prospects.enrichmentJsonb` |
+| Billing | Stripe Checkout + webhook via Convex `httpAction` | Two tiers |
 | Errors | Sentry | Frontend + serverless |
-| Product analytics | PostHog | Event funnel, approval rates |
-| Secrets | Vercel env + pgcrypto for token-at-rest | App-level key from env |
+| Product analytics | PostHog | Event funnel, approval rates, calibration drift |
+| Token encryption | Node `crypto` AES-256-GCM with `OAUTH_TOKEN_KEY` from env | OAuth tokens encrypted at rest in Convex |
 
 ---
 
 ## 5. Data model
 
-All tables carry `id uuid pk default gen_random_uuid()`, `created_at timestamptz default now()`, `updated_at timestamptz`, and tenant rows additionally carry `workspace_id uuid not null references workspaces(id) on delete cascade` with an index.
+Convex schema in `convex/schema.ts`. Every document has an auto-generated `_id` (typed `Id<"tableName">`) and `_creationTime` (number, ms since epoch). All custom timestamps below are also `v.number()` for consistency. Convex stores documents, not rows; relationships are unenforced `Id<"...">` references that app code is responsible for using correctly.
 
 ### 5.1 workspaces
-```
-id, name text, owner_id uuid references auth.users(id),
-stripe_customer_id text, plan text check (plan in ('free','solo','team')),
-monthly_send_quota int, monthly_sends_used int default 0,
-quota_reset_at timestamptz
+```ts
+{
+  name: v.string(),
+  ownerId: v.id("users"),                       // Convex Auth users table
+  stripeCustomerId: v.optional(v.string()),
+  plan: v.union(v.literal("free"), v.literal("solo"), v.literal("team")),
+  monthlySendQuota: v.number(),
+  monthlySendsUsed: v.number(),
+  quotaResetAt: v.optional(v.number()),
+}
+.index("by_owner", ["ownerId"])
 ```
 
 ### 5.2 senders
+```ts
+{
+  workspaceId: v.id("workspaces"),
+  name: v.string(),
+  email: v.string(),
+  provider: v.union(v.literal("gmail"), v.literal("outlook")),
+  domain: v.optional(v.string()),
+  oauthAccessTokenEncrypted: v.bytes(),         // AES-256-GCM
+  oauthRefreshTokenEncrypted: v.bytes(),
+  oauthExpiresAt: v.optional(v.number()),
+  voiceSamples: v.array(v.object({ subject: v.string(), body: v.string() })),
+  voiceSamplesIndexedAt: v.optional(v.number()),
+  dailySendCap: v.number(),                     // default 200
+  sendsToday: v.number(),
+  sendsTodayResetAt: v.optional(v.number()),
+}
+.index("by_workspace", ["workspaceId"])
+.index("by_workspace_email", ["workspaceId", "email"])   // uniqueness enforced in app
 ```
-workspace_id, name text, email citext unique per workspace,
-provider text check (provider in ('gmail','outlook')), domain text,
-oauth_access_token_encrypted bytea, oauth_refresh_token_encrypted bytea,
-oauth_expires_at timestamptz,
-voice_samples_jsonb jsonb,    -- array of { subject, body }
-voice_samples_indexed_at timestamptz,
-daily_send_cap int default 200,
-sends_today int default 0, sends_today_reset_at timestamptz
-```
-Voice samples: 5–10 replied-to emails pasted by the user. Stored verbatim. Injected into the prompt prefix (cached). Not embedded in MVP.
 
 ### 5.3 icps
-```
-workspace_id, name text,
-industry text[], role_keywords text[], size_range int4range,
-geo text[], exclusions text[], value_prop text,
-threshold_default int default 70 check (threshold_default between 0 and 100)
+```ts
+{
+  workspaceId: v.id("workspaces"),
+  name: v.string(),
+  industry: v.array(v.string()),
+  roleKeywords: v.array(v.string()),
+  sizeRangeMin: v.optional(v.number()),
+  sizeRangeMax: v.optional(v.number()),
+  geo: v.array(v.string()),
+  exclusions: v.array(v.string()),
+  valueProp: v.optional(v.string()),
+  thresholdDefault: v.number(),                 // default 70
+}
+.index("by_workspace", ["workspaceId"])
 ```
 
 ### 5.4 prospects
+```ts
+{
+  workspaceId: v.id("workspaces"),
+  senderId: v.optional(v.id("senders")),
+  icpId: v.optional(v.id("icps")),
+  email: v.string(),
+  firstName: v.optional(v.string()),
+  lastName: v.optional(v.string()),
+  company: v.optional(v.string()),
+  role: v.optional(v.string()),
+  linkedinUrl: v.optional(v.string()),
+  customFields: v.any(),                        // arbitrary CSV custom_* columns
+  enrichment: v.optional(v.any()),
+  enrichmentFetchedAt: v.optional(v.number()),
+  enrichmentStatus: v.optional(v.union(
+    v.literal("pending"), v.literal("ok"), v.literal("failed"), v.literal("fallback_csv_only"),
+  )),
+}
+.index("by_workspace", ["workspaceId"])
+.index("by_workspace_email", ["workspaceId", "email"])
 ```
-workspace_id, sender_id, icp_id,
-email citext, first_name text, last_name text, company text, role text,
-linkedin_url text, custom_fields_jsonb jsonb,
-enrichment_jsonb jsonb, enrichment_fetched_at timestamptz,
-enrichment_status text check (status in ('pending','ok','failed','fallback_csv_only'))
-```
-Unique constraint on `(workspace_id, email)`.
 
 ### 5.5 generations
+```ts
+{
+  workspaceId: v.id("workspaces"),
+  prospectId: v.id("prospects"),
+  senderId: v.id("senders"),
+  icpId: v.optional(v.id("icps")),
+  parentGenerationId: v.optional(v.id("generations")),
+  subject: v.optional(v.string()),
+  body: v.optional(v.string()),
+  model: v.optional(v.string()),
+  promptVersion: v.optional(v.string()),
+  retryCount: v.number(),
+  status: v.union(
+    v.literal("pending"), v.literal("enriching"), v.literal("generating"),
+    v.literal("scoring"), v.literal("needs_review"), v.literal("approved"),
+    v.literal("rejected"), v.literal("flagged"), v.literal("sending"),
+    v.literal("sent"), v.literal("failed"),
+  ),
+  overallScore: v.optional(v.number()),
+  approvedBy: v.optional(v.id("users")),
+  approvedAt: v.optional(v.number()),
+  lastError: v.optional(v.string()),
+}
+.index("by_workspace", ["workspaceId"])
+.index("by_prospect", ["prospectId"])
+.index("by_workspace_status", ["workspaceId", "status"])   // approval table
 ```
-prospect_id, sender_id, icp_id,
-subject text, body text, model text, prompt_version text,
-retry_count int default 0,
-status text check (status in (
-  'pending','enriching','generating','scoring','needs_review',
-  'approved','rejected','flagged','sending','sent','failed')),
-overall_score numeric(5,2),
-approved_by uuid references auth.users(id), approved_at timestamptz,
-last_error text
-```
-A prospect can have multiple generations across retry attempts. `retry_count` resets to 0 for each new manual run; auto-retries within a run share the same generation chain via `parent_generation_id uuid references generations(id)`.
 
 ### 5.6 scores
+```ts
+{
+  workspaceId: v.id("workspaces"),
+  generationId: v.id("generations"),
+  judgeName: v.union(
+    v.literal("ai_detection"), v.literal("genericness"), v.literal("personalization"),
+  ),
+  score: v.number(),                            // 0–100
+  subScores: v.any(),
+  evidence: v.any(),
+  judgeVersion: v.string(),
+  scoredAt: v.number(),
+}
+.index("by_generation", ["generationId"])
+.index("by_generation_judge", ["generationId", "judgeName"])   // uniqueness enforced in app
 ```
-generation_id, judge_name text check (judge_name in (
-  'ai_detection','genericness','personalization')),
-score numeric(5,2),                -- 0–100
-sub_scores_jsonb jsonb,            -- per-axis or per-section breakdown
-evidence_jsonb jsonb,              -- top flags, similar matches, grounded refs
-judge_version text, scored_at timestamptz
-```
-One row per judge per generation. UI joins on `generation_id` to render breakdown.
 
 ### 5.7 sends
-```
-generation_id, sender_id,
-sent_at timestamptz, send_method text check (in ('gmail','outlook')),
-external_message_id text,
-error text, status text check (status in ('queued','sent','failed','bounced'))
+```ts
+{
+  workspaceId: v.id("workspaces"),
+  generationId: v.id("generations"),
+  senderId: v.id("senders"),
+  sentAt: v.optional(v.number()),
+  sendMethod: v.optional(v.union(v.literal("gmail"), v.literal("outlook"))),
+  externalMessageId: v.optional(v.string()),
+  error: v.optional(v.string()),
+  status: v.union(
+    v.literal("queued"), v.literal("sent"), v.literal("failed"), v.literal("bounced"),
+  ),
+}
+.index("by_workspace", ["workspaceId"])
 ```
 
-### 5.8 email_corpus
+### 5.8 emailCorpus (global, no workspaceId)
+```ts
+{
+  source: v.optional(v.string()),
+  origin: v.union(v.literal("ai"), v.literal("human"), v.literal("template")),
+  model: v.optional(v.string()),
+  vendor: v.optional(v.string()),
+  subject: v.optional(v.string()),
+  body: v.string(),
+  embeddingOpener: v.array(v.float64()),        // length 1536
+  embeddingBody: v.array(v.float64()),
+  embeddingCta: v.array(v.float64()),
+  metadata: v.any(),
+}
+.index("by_origin", ["origin"])
+.vectorIndex("vec_opener", { vectorField: "embeddingOpener", dimensions: 1536, filterFields: ["origin"] })
+.vectorIndex("vec_body",   { vectorField: "embeddingBody",   dimensions: 1536, filterFields: ["origin"] })
+.vectorIndex("vec_cta",    { vectorField: "embeddingCta",    dimensions: 1536, filterFields: ["origin"] })
 ```
-source text,                                  -- url / dataset / generator
-origin text check (origin in ('ai','human','template')),
-model text, vendor text,                      -- only for ai/template
-subject text, body text,
-embedding_opener vector(1536),
-embedding_body vector(1536),
-embedding_cta vector(1536),
-metadata_jsonb jsonb
+
+### 5.9 senderLocks (for rate-limited sends)
+```ts
+{
+  senderId: v.id("senders"),
+  acquiredAt: v.number(),
+  expiresAt: v.number(),
+}
+.index("by_sender", ["senderId"])
 ```
-HNSW indexes on each embedding column. No `workspace_id` — corpus is global.
+Used to enforce per-sender concurrency. Acquire atomically in a mutation; release after send completes or expires.
 
 ---
 
-## 6. Corpus bootstrap (one-time before launch)
+## 6. Tenant isolation: the `withWorkspace` helper
 
-Script: `scripts/corpus/build.ts`. Outputs to `email_corpus`.
+Every query/mutation/action that touches tenant data must go through this helper. Located at `convex/lib/auth.ts`:
+
+```ts
+import { QueryCtx, MutationCtx, ActionCtx } from "./_generated/server";
+
+export async function withWorkspace<T>(
+  ctx: QueryCtx | MutationCtx | ActionCtx,
+  fn: (workspaceId: Id<"workspaces">) => Promise<T>,
+): Promise<T> {
+  const identity = await ctx.auth.getUserIdentity();
+  if (!identity) throw new Error("Not authenticated");
+  const userId = identity.subject as Id<"users">;
+  const workspace = await ctx.db
+    .query("workspaces")
+    .withIndex("by_owner", q => q.eq("ownerId", userId))
+    .first();
+  if (!workspace) throw new Error("No workspace");
+  return fn(workspace._id);
+}
+```
+
+**Usage pattern:**
+```ts
+export const listProspects = query({
+  args: {},
+  handler: (ctx) => withWorkspace(ctx, async (workspaceId) => {
+    return ctx.db.query("prospects")
+      .withIndex("by_workspace", q => q.eq("workspaceId", workspaceId))
+      .collect();
+  }),
+});
+```
+
+**Enforcement:**
+1. **Lint rule** (`eslint-plugin-no-restricted-syntax`) forbids `ctx.db.query` and `ctx.db.insert` calls outside files in `convex/lib/`. All app-level functions must route through helpers.
+2. **Code review checklist** item: "every new query/mutation/action uses `withWorkspace`."
+3. **Cross-tenant integration test** (see §18) attempts to read user A's data as user B and asserts empty.
+
+**Honest failure mode.** A missed filter in a single function = silent data leak. The Postgres-RLS version of this product would refuse such queries at the DB. We accept this tradeoff for the simpler stack and pay it back with the lint rule, the test, and review discipline. **If we ever have a security incident traceable to a missed filter, RLS pgsql is the migration path.**
+
+---
+
+## 7. Corpus bootstrap (one-time before launch)
+
+Script: `scripts/corpus/build.ts` (run with `npx convex run scripts:buildCorpus` after publishing it as a Convex action).
 
 | Bucket | Target | Source | Cost |
 |---|---|---|---|
@@ -198,32 +348,36 @@ Script: `scripts/corpus/build.ts`. Outputs to `email_corpus`.
 | Human | 1,000 | r/sales replied-to threads, Twitter/X founder threads, Pavilion archive, Lavender blog samples | scrape time |
 | Template | 500 | Public AI SDR vendor demo pages, Apollo/Outreach template galleries, GitHub awesome-sales-templates repos | scrape time |
 
-**Pipeline.** For each email: extract `(subject, body)` → segment into `(opener, body_middle, cta)` via simple regex on first sentence / last paragraph with imperative or question → embed each segment with `text-embedding-3-small` → upsert.
+**Pipeline.** For each email: extract `(subject, body)` → segment into `(opener, body_middle, cta)` via regex on first sentence / last paragraph with imperative or question → embed each segment with `text-embedding-3-small` → insert into `emailCorpus`.
 
 **Quality gate.** Before launch, run `scripts/corpus/validate.ts`:
 - ≥1,800 ai rows, ≥900 human rows, ≥400 template rows
-- No row with empty `embedding_body`
+- No row with empty `embeddingBody`
 - Spot-check 50 random rows manually
 
 ---
 
-## 7. Generation + eval loop
+## 8. Generation + eval loop
 
-### 7.1 Inngest functions
-
-```
-prospect.uploaded         → enrichProspect()
-prospect.enriched         → generateDraft()
-generation.created        → scoreFanout()  // parallel 3
-scores.complete           → evaluateBlend()
-generation.below_threshold→ generateDraft() with feedback
-approval.granted          → sendEmail()
-```
-
-### 7.2 Generation prompt structure
+### 8.1 Action chain
 
 ```
-SYSTEM (cached):
+prospect.uploaded                                          (mutation, enqueues action)
+  → enrichProspect (action)                                 Apify or CSV fallback
+    → generateDraft (action)                                Anthropic with prompt caching
+      → scoreAll (action)                                   Promise.all over 3 judges
+        → evaluateBlend (mutation)                          atomic threshold check
+          ├─ below + retry<3 → schedule generateDraft       feedback in payload
+          ├─ below + retry==3 → status='flagged'
+          └─ above → status='needs_review'
+```
+
+Each step writes its result to the `generations` document before invoking the next. If an action dies, the next retry sees the most recent checkpoint and resumes from there — replacing Inngest's durable steps with explicit DB state.
+
+### 8.2 Generation prompt structure
+
+```
+SYSTEM (cached via Anthropic prompt caching):
   - Role: cold email writer in user's voice
   - Voice samples (5–10) verbatim as few-shot
   - ICP definition
@@ -239,39 +393,37 @@ USER (per-prospect):
 
 Prompt caching applied to the SYSTEM block. Cache hit ratio target: >70%.
 
-### 7.3 Regeneration feedback
+### 8.3 Regeneration feedback
 
-When `overall_score < threshold`, the next generation call receives:
+When `overallScore < threshold`, the next generation call receives:
 
 ```
 PREVIOUS_DRAFT: <subject + body>
 SCORES:
-  ai_detection: 62 (was below 70 because opener flagged as "hedging" and "AI rhythm")
+  ai_detection: 62 (below 70 because opener flagged as "hedging" and "AI rhythm")
   genericness: 81
-  personalization: 58 (was below 70: only 1 grounded reference, generic "{company}" token used)
+  personalization: 58 (below 70: only 1 grounded reference, generic "{company}" token used)
 CRITIQUE: <free-form Haiku critique, 2-3 sentences>
 INSTRUCTIONS:
   - Rewrite to lift the lowest-scoring dimension first
   - Preserve anything the highest-scoring dimension rewarded
 ```
 
-Both structured deltas and natural-language critique are included — the handoff says test both, MVP includes both and we tune later.
+Both structured deltas and natural-language critique included. Max retries: **3**. After 3, set status `flagged`.
 
-Max retries: **3**. If still below threshold after 3, set status `flagged` and surface to user with explanation.
-
-### 7.4 Score blend
+### 8.4 Score blend
 
 ```
 overall = 0.4 × ai_detection + 0.3 × genericness + 0.3 × personalization
 ```
 
-Threshold defaults to `icps.threshold_default` (70). Per-ICP override supported. No per-judge minimums in MVP — only the blended score gates.
+Threshold defaults to `icps.thresholdDefault` (70). Per-ICP override supported.
 
 ---
 
-## 8. Judges
+## 9. Judges
 
-### 8.1 AI-Detection
+### 9.1 AI-Detection
 
 **Model:** Haiku 4.5
 **Input:** subject + body
@@ -288,39 +440,35 @@ Threshold defaults to `icps.threshold_default` (70). Per-ICP override supported.
 ```
 Score interpretation: **higher = more human**. AI corpus should score low; human corpus should score high.
 
-**Rubric.** Stored in `prompts/judges/ai_detection.md`, versioned. Each axis defines specific tells:
-- opener: "I came across", "hope this finds", "I noticed your"
-- structure: rigid 3-paragraph rhythm, every email same shape
-- hedging: "might be", "could potentially", "I think this could be"
-- cta: low-commitment dual-option asks ("worth a quick chat or open to ideas?")
-- vocabulary: "leverage", "synergize", "streamline", "robust", "innovative"
-- punctuation: em-dash density, semicolon overuse
-- rhythm: identical sentence length variance, no fragments
+**Rubric.** Stored in `prompts/judges/ai_detection.md`, versioned.
 
 **Calibration target (pre-launch):**
 - Mean score on AI corpus: ≤30
 - Mean score on human corpus: ≥70
 - Overlap (AI rows >50 + human rows <50): <10% of corpus
 
-### 8.2 Genericness
+### 9.2 Genericness (updated from v1 — bidirectional)
 
-**Method:** pure pgvector cosine similarity.
+**Method:** Convex vector search with over-fetch + filter pattern, computing both distance-from-bad and closeness-to-good.
 
-1. Embed candidate's `(opener, body, cta)` separately
-2. For each segment, compute `max(1 - cosine_distance)` against the AI corpus and the template corpus
-3. Take the max across segments → `peak_similarity`
-4. `score = round(100 × (1 - peak_similarity))`
+For each segment (opener, body, cta):
+1. Use `ctx.vectorSearch("emailCorpus", "vec_opener", { vector, limit: 100, filter: q => q.or(q.eq("origin", "ai"), q.eq("origin", "template")) })` — over-fetch 100, top 3 after filter.
+2. Same against `origin === "human"` for closeness-to-good.
+3. `distance_from_bad = 1 - max_similarity_to_ai_template`
+4. `closeness_to_good = max_similarity_to_human`
+5. Per-segment score: `100 × (0.6 × distance_from_bad + 0.4 × closeness_to_good)`
+6. Final judge score: `min(per-segment scores)` — penalize the worst segment.
 
-Score interpretation: **higher = more unique**. Low score = "looks like every other AI SDR email."
+Score interpretation: **higher = more unique AND more human-like**. Closes laksh's gap: a unique-but-bad email is far from bad corpus *and* far from human corpus, scoring poorly.
 
-Evidence: top 3 most-similar corpus rows with their similarity scores, source, and snippet.
+Evidence emitted to the score document: top 3 closest matches from each corpus with similarity scores, source, snippet.
 
 No LLM call in this judge.
 
-### 8.3 Personalization Depth
+### 9.3 Personalization Depth
 
 **Model:** Haiku 4.5
-**Input:** body + full enrichment JSON
+**Input:** body + full enrichment object
 **Output schema:**
 ```json
 {
@@ -328,8 +476,8 @@ No LLM call in this judge.
     { "snippet": "...", "grounded_in": "enrichment.recent_posts[2]", "specificity": "high|med|low|generic" }
   ],
   "generic_token_hits": ["{company}", "your role at <company>"],
-  "grounded_ref_count": int,
-  "score": 0-100
+  "grounded_ref_count": 0,
+  "score": 0
 }
 ```
 **Scoring rules:**
@@ -337,232 +485,230 @@ No LLM call in this judge.
 - +20 per grounded high-specificity reference (cap 60)
 - +10 per grounded med-specificity (cap 20)
 - −30 per generic token hit
-- −40 if grounded_ref_count == 0
+- −40 if `grounded_ref_count === 0`
 - Floor 0, ceiling 100
 
-Score interpretation: **higher = more personalized**.
+---
+
+## 10. Enrichment
+
+**Path A — LinkedIn (preferred):** Apify actor `dev_fusion/linkedin-profile-scraper` via Convex action. Result cached in `prospects.enrichment` with `enrichmentStatus='ok'`. Fields used: headline, about, recent posts (top 5), current role tenure, skills.
+
+**Path B — CSV-only fallback:** If `linkedinUrl` is missing or Apify returns nothing within 30s × 2 retries, set `enrichmentStatus='fallback_csv_only'` and proceed.
+
+**Caching.** Re-enrichment is skipped if `enrichmentFetchedAt` is within 90 days. Manual refresh button per prospect in UI.
+
+**Cost guardrail.** Hard monthly cap per workspace; banner in UI when 80% consumed.
 
 ---
 
-## 9. Enrichment
+## 11. Onboarding flow
 
-**Path A — LinkedIn (preferred):** Apify actor `dev_fusion/linkedin-profile-scraper` with the prospect's `linkedin_url`. Result cached in `prospects.enrichment_jsonb` with `enrichment_status='ok'`. Fields used: headline, about, recent posts (top 5), current role tenure, skills.
-
-**Path B — CSV-only fallback:** If `linkedin_url` is missing or Apify returns nothing within 30s × 2 retries, set `enrichment_status='fallback_csv_only'` and proceed with whatever CSV fields exist. Personalization Depth scores will naturally trend lower; that is acceptable signal.
-
-**Caching.** Re-enrichment is skipped if `enrichment_fetched_at` is within 90 days. Manual refresh button per prospect in UI.
-
-**Cost guardrail.** Apify pay-per-result. Hard monthly cap per workspace tracked in PostHog; surface in UI when 80% consumed.
-
----
-
-## 10. Onboarding flow
-
-Single linear wizard, 4 steps, persistent state in `workspaces` row:
+Single linear wizard, 4 steps, persistent state in `workspaces`:
 
 1. **Workspace.** Name. Auto-created on first sign-in if absent.
-2. **Connect sender.** Google or Microsoft OAuth. Required scopes: `gmail.send` (Gmail) or `Mail.Send` (Graph). Refresh token stored encrypted.
+2. **Connect sender.** Google or Microsoft OAuth (separate from sign-in auth — `gmail.send` / `Mail.Send` scope). Refresh token encrypted with AES-256-GCM and stored in `senders.oauthRefreshTokenEncrypted`.
 3. **Define ICP.** Form fields per §5.3. At least one industry and one role keyword required.
-4. **Voice samples.** Textarea pairs (subject + body) ×5 minimum, 10 maximum. Persisted as JSONB on `senders`.
+4. **Voice samples.** Textarea pairs (subject + body) ×5 minimum, 10 maximum.
 
 Wizard cannot be skipped; CSV upload route returns user here if any step incomplete.
 
 ---
 
-## 11. CSV upload
+## 12. CSV upload
 
 **Required columns:** `email`, `first_name`, `company`
 **Optional:** `last_name`, `role`, `linkedin_url`
-**Custom:** any column prefixed `custom_` is preserved in `custom_fields_jsonb`
+**Custom:** any column prefixed `custom_` is preserved in `customFields`
 
 **Validation (client-side preview before insert):**
 - Email regex + dedupe within file
-- Reject rows with empty required cols, show line numbers
-- Cap: 5,000 rows per upload (Solo plan), 50,000 (Team)
-- Show 5-row preview with parsed fields before commit
+- Reject rows with empty required cols
+- Cap: 5,000 rows per upload (Solo), 50,000 (Team)
+- Show 5-row preview before commit
 
-On commit: bulk insert prospects, then emit one `prospect.uploaded` event per row.
+On commit: bulk insert prospects via a single mutation (Convex supports batch inserts), then emit one `prospect.uploaded` event per row (scheduled action) so the eval pipeline picks them up.
 
 ---
 
-## 12. Approval UI
+## 13. Approval UI
 
-Single table view, paginated 50/page. Columns:
+Single table view, paginated 50/page. **Uses Convex's reactive `useQuery` so new scores appear without page refresh.**
+
+Columns:
 - Checkbox (bulk approve)
 - Prospect (name, company, role)
 - Subject + body preview (truncated, click to expand)
 - Overall score (color-coded: green ≥80, yellow 70–79, red <70)
-- Sub-scores (3 mini bars: ai-detection, genericness, personalization)
+- Sub-scores (3 mini bars)
 - Status badge
 
 **Expanded row drawer:**
 - Full email rendered as it will send
 - Per-judge breakdown with axis scores and red flags
-- Evidence: for genericness, similar corpus matches with snippets; for personalization, grounded references highlighted in body
-- Regenerate button (manual retry, counts against quota)
-- Edit-and-approve (small inline edits don't re-score)
-- Reject button (sets status=rejected, no send)
+- Evidence: top similar corpus matches; grounded references highlighted in body
+- Regenerate, Edit-and-approve, Reject buttons
 
 Bulk actions: Approve all visible, Reject all visible, Approve all with score ≥X.
 
-Flagged generations (after 3 failed retries) appear in a separate tab with the lowest sub-score surfaced so the user knows why.
+Flagged generations appear in a separate tab.
 
 ---
 
-## 13. Send flow
+## 14. Send flow
 
-**Trigger:** user approval (single or bulk) emits `approval.granted` event.
+**Trigger:** approval mutation schedules a `sendEmail` action with `runAfter(delayMs)` for drip + jitter.
 
-**Rate limiting:** per `senders.daily_send_cap` (default 200, max 500 Gmail / 1000 Outlook). Inngest concurrency key `sender:{id}` with throttle. Drip schedule: sends staggered with random jitter 30–180 seconds between sends per sender.
+**Rate limiting:** before each send, acquire a `senderLocks` row in a mutation:
+```ts
+// atomic acquire (Convex mutations are serializable)
+const existing = await ctx.db.query("senderLocks")
+  .withIndex("by_sender", q => q.eq("senderId", id))
+  .filter(q => q.gt(q.field("expiresAt"), Date.now()))
+  .first();
+if (existing) throw new Error("Sender busy, retrying");
+await ctx.db.insert("senderLocks", { senderId: id, acquiredAt: now, expiresAt: now + 60_000 });
+```
+Per-sender concurrency = 1. Drip schedule: random jitter 30–180s between sends. Honors `senders.dailySendCap` (default 200, max Gmail 500 / Outlook 1000).
 
 **Send path:**
-- Gmail: `users.messages.send` with raw RFC822
-- Outlook: `users/me/sendMail` with JSON payload
-- Capture `external_message_id` into `sends` row
+- Gmail: `users.messages.send`
+- Outlook: `users/me/sendMail`
+- Capture `external_message_id` into `sends`
 - On 401: refresh OAuth token, retry once
-- On 429: backoff per provider docs, mark `failed` after 3 retries
+- On 429: backoff, mark `failed` after 3 retries
 
-**Daily counter reset:** Inngest cron at sender's local midnight (or UTC for MVP) resets `sends_today`.
+**Daily counter reset:** scheduled Convex cron at UTC midnight resets `sendsToday`.
 
 ---
 
-## 14. Billing
+## 15. Billing
 
-**Tiers (set in Stripe Products):**
+**Tiers (Stripe Products):**
 | Tier | Price | Sends/mo | Senders | Prospects/upload |
 |---|---|---|---|---|
 | Solo | $300 | 2,000 | 1 | 5,000 |
 | Team | $1,500 | 15,000 | 5 | 50,000 |
 
-**Checkout:** Stripe-hosted Checkout, success URL returns user to `/billing/success` which polls webhook completion.
+**Checkout:** Stripe-hosted Checkout via a server action; success URL polls a Convex query that watches the workspace plan.
 
-**Webhook:** `checkout.session.completed` → update `workspaces.plan`, `monthly_send_quota`, set `quota_reset_at`. `customer.subscription.deleted` → downgrade to `free` (read-only).
+**Webhook:** `checkout.session.completed` → Convex `httpAction` verifies signature → updates `workspaces.plan`, `monthlySendQuota`, sets `quotaResetAt`.
 
-**Metering:** every successful `sends` row insert increments `workspaces.monthly_sends_used` in a transaction. When `>= monthly_send_quota`, the `send.email` Inngest function short-circuits with status `failed` and surfaces a quota-exhausted banner.
+**Metering:** every successful `sends` insert increments `workspaces.monthlySendsUsed` in the same mutation (atomic). When `>= monthlySendQuota`, the `sendEmail` action short-circuits with status `failed`.
 
-**Quota reset:** Inngest daily cron checks `quota_reset_at`, resets `monthly_sends_used` to 0, advances `quota_reset_at` 30 days.
+**Quota reset:** Convex daily cron resets `monthlySendsUsed` at `quotaResetAt`.
 
-**Cost-per-send target:** $0.02 (~$0.012 generation including 3 retries × ~70% cache, ~$0.005 judges, ~$0.003 enrichment amortized). Gross margin target ~85%.
-
----
-
-## 15. API surface (Next.js App Router)
-
-Server actions handle all mutations. Public route handlers exist only for webhooks and OAuth callbacks.
-
-```
-POST  /api/auth/google/callback          OAuth callback (sender connect)
-POST  /api/auth/microsoft/callback       OAuth callback
-POST  /api/webhooks/stripe               Stripe webhook
-POST  /api/webhooks/inngest              Inngest signature-verified endpoint
-GET   /api/prospects/preview-csv         Parse + validate, no insert
-```
-
-Server actions (RSC):
-```
-createWorkspace, updateIcp,
-uploadProspects, enqueueGenerate,
-approveGenerations, rejectGenerations, regenerate,
-revokeOAuth, deleteWorkspace
-```
-
-All server actions check `auth.uid()` against `workspaces.owner_id` (or future membership row).
+**Cost-per-send target:** $0.02. Gross margin target ~85%.
 
 ---
 
-## 16. Observability
+## 16. API surface
 
-**Sentry:** server + browser. Tag every event with `workspace_id` when available.
+**Convex functions (called via the Convex client SDK from Next.js):**
+- Queries: `prospects.list`, `generations.listForApproval`, `workspace.get`, `senders.list`, `scores.forGeneration`
+- Mutations: `workspace.create`, `icp.update`, `prospect.uploadCsv`, `generation.approve`, `generation.reject`, `generation.regenerate`, `sender.revokeOauth`
+- Actions: `sender.completeOauth`, `prospect.enrich`, `generation.draft`, `generation.scoreAll`, `email.send`
+- httpActions: `stripeWebhook`, `gmailOauthCallback`, `outlookOauthCallback`
+- scheduledFunctions: `quota.resetMonthly`, `sender.resetDaily`, `senderLocks.expire`
 
-**PostHog events (funnel):**
-- `signup`, `workspace_created`
-- `sender_connected` (props: provider)
-- `icp_completed`, `voice_samples_saved` (props: count)
-- `csv_uploaded` (props: row_count)
-- `generation_created`, `generation_scored` (props: overall, ai_detection, genericness, personalization)
+**Next.js route handlers (thin shims, only for things that need a public HTTP endpoint):**
+- `/api/auth/[...convex]` — Convex Auth handler
+- `/api/csv-preview` — CSV parse + validate, no insert
+
+---
+
+## 17. Observability
+
+**Sentry:** server + browser. Tag every event with `workspaceId` when available.
+
+**PostHog events:**
+- `signup`, `workspace_created`, `sender_connected`, `icp_completed`, `voice_samples_saved`
+- `csv_uploaded`, `generation_created`, `generation_scored`
 - `generation_approved`, `generation_rejected`, `generation_flagged`
 - `send_succeeded`, `send_failed`
 - `checkout_started`, `subscription_active`
 
-**Internal dashboard (post-MVP):** corpus calibration drift over time, mean overall score per ICP, approval rate per ICP, retry distribution.
+**Analytics queries** (calibration drift, approval rate per ICP, retry distribution) live in PostHog or are computed by nightly scheduled Convex functions that materialize summary documents. Direct ad-hoc SQL is not available — accepted tradeoff.
 
 ---
 
-## 17. Security
+## 18. Security
 
-- **OAuth tokens** encrypted at rest with `pgcrypto.pgp_sym_encrypt` keyed by `OAUTH_TOKEN_KEY` env var (rotated quarterly, dual-key decrypt window)
-- **RLS** enforced on every tenant table. Policies verified by `scripts/security/rls-test.ts` (attempts cross-workspace reads, expects 0 rows)
-- **Service-role key** never reaches the client; used only in Inngest function handlers and server actions
-- **CSRF:** Next.js server actions provide built-in CSRF; webhooks verify signatures (Stripe, Inngest)
-- **Rate limit on public endpoints:** Vercel WAF or Upstash Ratelimit on `/api/webhooks/*` and OAuth callbacks
-- **No PII in logs:** Sentry scrubbing rules strip `email`, `body`, `oauth_token*` from breadcrumbs
+- **OAuth tokens** encrypted at rest with Node `crypto.createCipheriv('aes-256-gcm', ...)` keyed by `OAUTH_TOKEN_KEY` env var (32 bytes hex)
+- **Tenant isolation** enforced at the app layer via `withWorkspace`. Lint rule forbids raw `ctx.db.query` outside `convex/lib/`. Cross-tenant test asserts empty results across workspaces.
+- **Convex Auth** handles session validation; functions reject unauthenticated requests via `ctx.auth.getUserIdentity()` in `withWorkspace`.
+- **Webhook signature verification** for Stripe (`stripe.webhooks.constructEvent`) and Gmail push (if used post-MVP).
+- **No PII in logs:** Sentry scrubbing rules strip `email`, `body`, `oauth_token*`.
 
 ---
 
-## 18. Testing strategy
+## 19. Testing strategy
 
-**Three test layers, in order of importance:**
+**Three test layers:**
 
 1. **Eval calibration tests** (`tests/eval/`). Run the 3 judges over the corpus. Assert:
    - AI-Detection: mean ≤30 on ai rows, ≥70 on human rows
    - Genericness: mean ≤40 on ai rows, ≥60 on human rows (templates score lowest)
    - Personalization: needs synthetic prospect+enrichment pairs; assert grounded refs detected
 
-2. **Integration tests** (`tests/integration/`). Real Supabase test instance:
+2. **Integration tests** (`tests/integration/`). Use `convex-test`:
+   - **Cross-tenant isolation test** (load-bearing): create two users, each calls `prospects.list`, verify each only sees their own
    - Full loop: upload prospect → generate → score → approve → fake-send
-   - Rate limit caps respected
+   - Sender concurrency lock holds
    - Quota enforcement halts at limit
    - OAuth token refresh path
 
 3. **Unit tests** (`tests/unit/`). Pure functions: CSV parser, prompt builder, score blender, segment extractor.
 
-**Smoke test before any deploy:** `npm run smoke` runs one synthetic prospect through the entire loop against staging.
+**Pre-deploy smoke** (`scripts/smoke.ts`): typecheck, build, run all unit + integration tests.
 
 ---
 
-## 19. Build sequence
+## 20. Build sequence
 
-Each step below becomes its own implementation plan (via `writing-plans` skill).
+Each step becomes its own implementation plan via `writing-plans`.
 
-1. Supabase project + Next.js + Inngest scaffolding + RLS skeleton
+1. **Convex scaffolding + tenant isolation** (this plan — `2026-05-12-step-1-convex-scaffolding.md`)
 2. Corpus generator + scraper + embedder + validator
-3. AI-Detection judge + calibration test against corpus
-4. Genericness similarity over pgvector
+3. AI-Detection judge + calibration test
+4. Genericness similarity (bidirectional — both corpora)
 5. Personalization Depth judge
 6. Generation prompt + regeneration loop with feedback injection
-7. Onboarding wizard (workspace → sender OAuth → ICP → voice samples)
+7. Onboarding wizard
 8. Prospect CSV upload + parser + Apify enrichment with fallback
-9. Approval table UI with per-email score breakdown and evidence
-10. Gmail/Outlook send flow with drip + jitter rate limiting
-11. Stripe Checkout + webhook + quota metering
+9. Approval table UI with reactive `useQuery` + score breakdown + evidence
+10. Gmail/Outlook send flow with sender locks + drip + jitter
+11. Stripe Checkout + httpAction webhook + quota metering
 
 Steps 3, 4, 5 are independent and can run in parallel after step 2.
 
 ---
 
-## 20. Cut from MVP (defer until customers ask)
+## 21. Cut from MVP
 
-Sequences · reply handling · CRM sync · LinkedIn channel · hallucination eval · ICP-fit eval · reply-likelihood model · vendor scorecards · A/B testing · voice cloning beyond prompt-sampling · SSO · custom rubrics · free tier · public benchmark report · open/click tracking · team membership beyond single owner
+Sequences · reply handling · CRM sync · LinkedIn channel · hallucination eval · ICP-fit eval · reply-likelihood model · vendor scorecards · A/B testing · voice cloning beyond prompt-sampling · SSO · custom rubrics · free tier · public benchmark report · open/click tracking · team membership beyond single owner · SQL analytics ad-hoc (defer to PostHog/Metabase later if needed)
 
 ---
 
-## 21. Open questions resolved
+## 22. Open questions resolved
 
 | Question | Resolution |
 |---|---|
-| Threshold default | 70/100 overall; `icps.threshold_default` override per ICP |
-| Regeneration feedback format | Structured sub-score deltas **and** natural-language critique; test which lifts scores more post-launch |
-| Voice sample handling | Few-shot in cached prompt prefix; no fine-tune in MVP |
-| Send rate limits | Gmail 500/day, Outlook 1000/day surfaced in UI; configurable `senders.daily_send_cap` (default 200) with drip + jitter |
-| LinkedIn enrichment failure | CSV-only fallback path; `enrichment_status='fallback_csv_only'` |
-| Auth | Supabase Auth, Google OAuth primary (reuses Gmail scope grant) |
-| Multi-tenancy | Workspace-scoped RLS; single-owner for MVP, member table deferred |
+| Threshold default | 70/100 overall; `icps.thresholdDefault` override per ICP |
+| Regeneration feedback | Structured deltas + natural-language critique |
+| Voice sample handling | Few-shot in cached prompt prefix |
+| Send rate limits | Gmail 500/day, Outlook 1000/day surfaced in UI; configurable `senders.dailySendCap` (default 200) with drip + jitter |
+| LinkedIn enrichment failure | CSV-only fallback path |
+| Auth | Convex Auth (Google OAuth + magic link) |
+| Multi-tenancy | App-level via `withWorkspace`; single-owner for MVP |
 | Score blend weights | 0.4 AI-Detection · 0.3 Genericness · 0.3 Personalization |
+| Genericness measure | Bidirectional: distance-from-bad + closeness-to-good (corpus-vs-corpus) |
 | Max retries | 3, then `flagged` |
 | Subject scoring | Subject scored within AI-Detection `opener` axis |
 | Apify actor | `dev_fusion/linkedin-profile-scraper`, 90-day cache |
-| Stripe enforcement | Hard-stop at quota, banner in UI, no soft overage |
-| Email tracking | Out of scope for MVP |
+| Stripe enforcement | Hard-stop at quota, banner in UI |
+| Workflow engine | Convex actions + scheduledFunctions; Inngest not used |
+| Local dev | `npx convex dev`; no Docker |
 
 ---
 
@@ -587,22 +733,21 @@ Target: {{icp.role_keywords}} at {{icp.industry}} companies, {{icp.size_range}}
 Output JSON: { "subject": "...", "body": "..." }
 ```
 
-`prompts/judges/ai_detection.md`, `prompts/judges/personalization.md` — see §8.
+`prompts/judges/ai_detection.md`, `prompts/judges/personalization.md` — see §9.
 
 ---
 
-## Appendix B — Out-of-the-box decisions for the builder
-
-These are reasonable defaults locked in to avoid stalling. Each is overridable; none are load-bearing on the architecture.
+## Appendix B — Defaults locked in for the builder
 
 - TypeScript strict mode on
 - pnpm for package management
-- Drizzle ORM over the raw Supabase client (RLS-aware, easier migrations)
-- Inngest local dev via `npx inngest-cli dev`
-- ESLint + Prettier with default Next.js config
+- Convex generates client SDK and types — no separate ORM
+- Tailwind v3 (Convex examples use v3; Tailwind v4 migration is a separate concern)
+- ESLint + Prettier with default Next.js config, plus a `no-restricted-syntax` rule forbidding raw `ctx.db` outside `convex/lib/`
 - Vercel preview deploys per PR
 - Single `main` branch, trunk-based; feature branches squash-merge
+- Convex dev runs in the cloud against a dev deployment per developer (`npx convex dev`)
 
 ---
 
-**End of spec.**
+**End of spec v2.**

@@ -172,3 +172,48 @@ begin
                     for each row execute function set_updated_at()', t, t);
   end loop;
 end $$;
+
+-- ============================================================
+-- Row-Level Security
+-- ============================================================
+
+alter table workspaces  enable row level security;
+alter table senders     enable row level security;
+alter table icps        enable row level security;
+alter table prospects   enable row level security;
+alter table generations enable row level security;
+alter table scores      enable row level security;
+alter table sends       enable row level security;
+alter table email_corpus enable row level security;
+
+-- Helper: returns workspace_ids the current auth.uid() owns
+create or replace function auth_workspace_ids() returns setof uuid language sql stable as $$
+  select id from workspaces where owner_id = auth.uid()
+$$;
+
+-- workspaces: owners can CRUD their own
+create policy ws_select on workspaces for select using (owner_id = auth.uid());
+create policy ws_insert on workspaces for insert with check (owner_id = auth.uid());
+create policy ws_update on workspaces for update using (owner_id = auth.uid());
+create policy ws_delete on workspaces for delete using (owner_id = auth.uid());
+
+-- Tenant tables: workspace_id must be in auth_workspace_ids()
+do $$ declare t text;
+begin
+  for t in select unnest(array['senders','icps','prospects','generations','scores','sends'])
+  loop
+    execute format($f$
+      create policy %I_select on %I for select
+        using (workspace_id in (select auth_workspace_ids()));
+      create policy %I_insert on %I for insert
+        with check (workspace_id in (select auth_workspace_ids()));
+      create policy %I_update on %I for update
+        using (workspace_id in (select auth_workspace_ids()));
+      create policy %I_delete on %I for delete
+        using (workspace_id in (select auth_workspace_ids()));
+    $f$, t||'_sel', t, t||'_ins', t, t||'_upd', t, t||'_del', t);
+  end loop;
+end $$;
+
+-- email_corpus: authenticated read-only, no anon, no writes from authenticated
+create policy corpus_read on email_corpus for select to authenticated using (true);

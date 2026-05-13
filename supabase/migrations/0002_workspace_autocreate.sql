@@ -8,6 +8,7 @@ begin
   return new;
 end $$;
 
-create trigger on_auth_user_created
+-- Idempotent: `create or replace trigger` is supported on PG14+.
+create or replace trigger on_auth_user_created
   after insert on auth.users
   for each row execute function handle_new_user();

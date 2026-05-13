@@ -1,3 +1,7 @@
+-- Idempotent: re-running this migration against a partially-applied or fully-applied
+-- DB must succeed without errors. All CREATEs use `if not exists` where supported;
+-- policies and triggers use drop-then-create patterns.
+
 -- Extensions
 create extension if not exists "pgcrypto";
 create extension if not exists "vector";
@@ -5,7 +9,7 @@ create extension if not exists "citext";
 create extension if not exists "btree_gist";
 
 -- workspaces
-create table workspaces (
+create table if not exists workspaces (
   id uuid primary key default gen_random_uuid(),
   name text not null,
   owner_id uuid not null references auth.users(id) on delete cascade,
@@ -17,10 +21,10 @@ create table workspaces (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-create index on workspaces(owner_id);
+create index if not exists workspaces_owner_idx on workspaces(owner_id);
 
 -- senders
-create table senders (
+create table if not exists senders (
   id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null references workspaces(id) on delete cascade,
   name text not null,
@@ -39,10 +43,10 @@ create table senders (
   updated_at timestamptz not null default now(),
   unique (workspace_id, email)
 );
-create index on senders(workspace_id);
+create index if not exists senders_workspace_idx on senders(workspace_id);
 
 -- icps
-create table icps (
+create table if not exists icps (
   id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null references workspaces(id) on delete cascade,
   name text not null,
@@ -56,10 +60,10 @@ create table icps (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-create index on icps(workspace_id);
+create index if not exists icps_workspace_idx on icps(workspace_id);
 
 -- prospects
-create table prospects (
+create table if not exists prospects (
   id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null references workspaces(id) on delete cascade,
   sender_id uuid references senders(id) on delete set null,
@@ -78,10 +82,10 @@ create table prospects (
   updated_at timestamptz not null default now(),
   unique (workspace_id, email)
 );
-create index on prospects(workspace_id);
+create index if not exists prospects_workspace_idx on prospects(workspace_id);
 
 -- generations
-create table generations (
+create table if not exists generations (
   id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null references workspaces(id) on delete cascade,
   prospect_id uuid not null references prospects(id) on delete cascade,
@@ -104,12 +108,12 @@ create table generations (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-create index on generations(workspace_id);
-create index on generations(prospect_id);
-create index on generations(status);
+create index if not exists generations_workspace_idx on generations(workspace_id);
+create index if not exists generations_prospect_idx on generations(prospect_id);
+create index if not exists generations_status_idx on generations(status);
 
 -- scores
-create table scores (
+create table if not exists scores (
   id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null references workspaces(id) on delete cascade,
   generation_id uuid not null references generations(id) on delete cascade,
@@ -121,12 +125,12 @@ create table scores (
   scored_at timestamptz not null default now(),
   created_at timestamptz not null default now()
 );
-create index on scores(workspace_id);
-create index on scores(generation_id);
-create unique index on scores(generation_id, judge_name);
+create index if not exists scores_workspace_idx on scores(workspace_id);
+create index if not exists scores_generation_idx on scores(generation_id);
+create unique index if not exists scores_generation_judge_uniq on scores(generation_id, judge_name);
 
 -- sends
-create table sends (
+create table if not exists sends (
   id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null references workspaces(id) on delete cascade,
   generation_id uuid not null references generations(id) on delete cascade,
@@ -139,10 +143,10 @@ create table sends (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-create index on sends(workspace_id);
+create index if not exists sends_workspace_idx on sends(workspace_id);
 
 -- email_corpus (global, no workspace_id)
-create table email_corpus (
+create table if not exists email_corpus (
   id uuid primary key default gen_random_uuid(),
   source text,
   origin text not null check (origin in ('ai','human','template')),
@@ -156,20 +160,22 @@ create table email_corpus (
   metadata_jsonb jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now()
 );
-create index email_corpus_body_hnsw on email_corpus using hnsw (embedding_body vector_cosine_ops);
-create index email_corpus_opener_hnsw on email_corpus using hnsw (embedding_opener vector_cosine_ops);
-create index email_corpus_cta_hnsw on email_corpus using hnsw (embedding_cta vector_cosine_ops);
+create index if not exists email_corpus_body_hnsw on email_corpus using hnsw (embedding_body vector_cosine_ops);
+create index if not exists email_corpus_opener_hnsw on email_corpus using hnsw (embedding_opener vector_cosine_ops);
+create index if not exists email_corpus_cta_hnsw on email_corpus using hnsw (embedding_cta vector_cosine_ops);
 
 -- updated_at trigger helper
 create or replace function set_updated_at() returns trigger language plpgsql as $$
 begin new.updated_at = now(); return new; end $$;
 
+-- updated_at triggers (idempotent via create or replace trigger, PG14+)
 do $$ declare t text;
 begin
   for t in select unnest(array['workspaces','senders','icps','prospects','generations','sends'])
   loop
-    execute format('create trigger trg_%I_updated_at before update on %I
-                    for each row execute function set_updated_at()', t, t);
+    execute format(
+      'create or replace trigger trg_%I_updated_at before update on %I
+       for each row execute function set_updated_at()', t, t);
   end loop;
 end $$;
 
@@ -191,7 +197,11 @@ create or replace function auth_workspace_ids() returns setof uuid language sql 
   select id from workspaces where owner_id = auth.uid()
 $$;
 
--- workspaces: owners can CRUD their own
+-- workspaces: owners can CRUD their own. create policy has no `if not exists` so drop first.
+drop policy if exists ws_select on workspaces;
+drop policy if exists ws_insert on workspaces;
+drop policy if exists ws_update on workspaces;
+drop policy if exists ws_delete on workspaces;
 create policy ws_select on workspaces for select using (owner_id = auth.uid());
 create policy ws_insert on workspaces for insert with check (owner_id = auth.uid());
 create policy ws_update on workspaces for update using (owner_id = auth.uid());
@@ -203,6 +213,10 @@ begin
   for t in select unnest(array['senders','icps','prospects','generations','scores','sends'])
   loop
     execute format($f$
+      drop policy if exists %I_select on %I;
+      drop policy if exists %I_insert on %I;
+      drop policy if exists %I_update on %I;
+      drop policy if exists %I_delete on %I;
       create policy %I_select on %I for select
         using (workspace_id in (select auth_workspace_ids()));
       create policy %I_insert on %I for insert
@@ -211,9 +225,12 @@ begin
         using (workspace_id in (select auth_workspace_ids()));
       create policy %I_delete on %I for delete
         using (workspace_id in (select auth_workspace_ids()));
-    $f$, t||'_sel', t, t||'_ins', t, t||'_upd', t, t||'_del', t);
+    $f$,
+      t||'_sel', t, t||'_ins', t, t||'_upd', t, t||'_del', t,
+      t||'_sel', t, t||'_ins', t, t||'_upd', t, t||'_del', t);
   end loop;
 end $$;
 
 -- email_corpus: authenticated read-only, no anon, no writes from authenticated
+drop policy if exists corpus_read on email_corpus;
 create policy corpus_read on email_corpus for select to authenticated using (true);

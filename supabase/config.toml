@@ -222,7 +222,10 @@ url = ""
 skip_nonce_check = false
 
 [auth.external.google]
-enabled = true
+# Disabled in dev — magic-link auth is sufficient. Re-enable when wiring production
+# Google OAuth (Step 7 onboarding). When enabled, set SUPABASE_AUTH_GOOGLE_CLIENT_ID
+# and SUPABASE_AUTH_GOOGLE_SECRET in the environment before running supabase CLI.
+enabled = false
 client_id = "env(SUPABASE_AUTH_GOOGLE_CLIENT_ID)"
 # DO NOT commit your OAuth provider secret to git. Use environment variable substitution instead:
 secret = "env(SUPABASE_AUTH_GOOGLE_SECRET)"

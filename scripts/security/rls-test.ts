@@ -10,7 +10,9 @@
  * Supabase Postgres 15's auth.uid() reads. The legacy dotted-key format
  * (request.jwt.claim.sub) is NOT read by current Supabase auth helpers.
  */
-import 'dotenv/config';
+import { config as loadEnv } from 'dotenv';
+loadEnv({ path: '.env.local' });
+loadEnv({ path: '.env' });  // fallback for CI environments
 import postgres from 'postgres';
 import { randomUUID } from 'node:crypto';
 
@@ -76,5 +78,7 @@ async function main() {
 main().catch((e: unknown) => {
   const msg = e instanceof Error ? e.message : String(e);
   console.error('RLS test FAILED:', msg);
+  if (e instanceof Error && e.stack) console.error('STACK:', e.stack);
+  console.error('RAW:', e);
   process.exit(1);
 });

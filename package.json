@@ -12,10 +12,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "db:generate": "drizzle-kit generate",
-    "db:push": "supabase db push",
-    "db:reset": "supabase db reset",
-    "db:start": "supabase start",
-    "db:stop": "supabase stop",
+    "db:apply": "bash -c 'set -a; source .env.local; set +a; for f in supabase/migrations/*.sql; do echo \"=== $f ===\"; psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f \"$f\"; done'",
     "rls:test": "tsx scripts/security/rls-test.ts",
     "smoke": "tsx scripts/smoke.ts",
     "inngest:dev": "npx inngest-cli@latest dev -u http://localhost:3000/api/inngest"

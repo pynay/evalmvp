@@ -1,12 +1,25 @@
 # Eval-Gated Email Generation MVP — System Spec
 
-**Status:** Design v1.1 (bare-MVP scope, no billing)
+**Status:** Design v1.2 (aggressive bare-MVP scope)
 **Source:** `handoff.md` (initial commit 829090f)
 **Last updated:** 2026-05-13
 
-> **v1.1 scope cuts** (from v1, dated 2026-05-13):
-> - **Stripe billing + quota metering removed** (§14, §20). The MVP exists to answer "can the eval engine produce cold emails the founders would actually send." Billing is deferred until that question is answered yes.
-> - **Genericness judge gains a positive direction** (§8.2 — TBD when Step 4 lands): in addition to `distance from AI+template corpora`, score `closeness to human corpus` with a 0.4 weight. Addresses the "unique but bad" failure mode.
+> **The MVP's purpose:** answer ONE question — "can the eval engine produce cold emails the founders would actually send?" Anything that doesn't serve that question is stripped down to its minimal form or cut entirely.
+>
+> **v1.2 scope cuts (additive to v1.1):**
+> - **Step 7 onboarding wizard → minimal admin form** (§10): single page to set workspace ICP + voice samples + sender's name/from-email. No multi-step UI, no Gmail OAuth in this step.
+> - **Step 8 CSV upload → textarea paste** (§11): one prospect per line as `email, first_name, company, [linkedin_url]`. Apify enrichment still fires per prospect. No bulk-import UI, no preview-before-commit.
+> - **Step 9 approval UI → minimal list** (§12): list view with overall score + body preview + click-to-expand. Per-judge sub-scores in the expanded row. No bulk actions, no regenerate button (initial cut — reject + re-paste prospect to retry).
+> - **Step 10 send flow → copy-to-clipboard** (§13): on approval, the email body is rendered with a Copy button. The user pastes into Gmail manually. No Gmail OAuth, no Microsoft Graph, no drip + jitter, no rate limiting, no `sends` table populated.
+>
+> **v1.1 cuts (carried forward):**
+> - Stripe billing + quota metering (§14): deferred until eval quality is validated.
+> - Genericness judge gains a positive direction (§8.2): in addition to `distance from AI+template corpora`, score `closeness to human corpus` weighted 0.4. Addresses the "unique but bad" failure mode laksh flagged.
+>
+> **What's load-bearing and unchanged from v1:**
+> - Corpus bootstrap (§6), all 3 judges (§8), generation + regen loop (§7), the 70/100 threshold and 3-retry cap, the score blend, the schema.
+>
+> **Forward compatibility:** every cut feature has its data-model surface preserved (workspaces.stripe_customer_id, senders.oauth_*, sends table, etc.). Re-adding any of these later requires no migration — only filling in code paths that today are no-ops.
 
 ---
 
@@ -360,73 +373,67 @@ Score interpretation: **higher = more personalized**.
 
 ---
 
-## 10. Onboarding flow
+## 10. Onboarding flow — **STRIPPED (v1.2)**
 
-Single linear wizard, 4 steps, persistent state in `workspaces` row:
+**Bare-MVP form:** single page at `/setup` with three sections, all on one screen:
 
-1. **Workspace.** Name. Auto-created on first sign-in if absent.
-2. **Connect sender.** Google or Microsoft OAuth. Required scopes: `gmail.send` (Gmail) or `Mail.Send` (Graph). Refresh token stored encrypted.
-3. **Define ICP.** Form fields per §5.3. At least one industry and one role keyword required.
-4. **Voice samples.** Textarea pairs (subject + body) ×5 minimum, 10 maximum. Persisted as JSONB on `senders`.
+1. **ICP** — industry (text array), role keywords (text array), value prop (textarea). At least one industry + one role keyword required.
+2. **Sender identity** — name, from-email. NO OAuth in the bare MVP; the from-email is used for the email's "From:" line in the copy-paste output only.
+3. **Voice samples** — 5–10 `(subject, body)` pairs, persisted as JSONB on `senders.voice_samples_jsonb`.
 
-Wizard cannot be skipped; CSV upload route returns user here if any step incomplete.
+Workspace auto-created on first sign-in (already implemented in `0002_workspace_autocreate.sql`). The `/setup` page just populates the workspace's ICP and creates the sender row. No multi-step wizard.
 
----
-
-## 11. CSV upload
-
-**Required columns:** `email`, `first_name`, `company`
-**Optional:** `last_name`, `role`, `linkedin_url`
-**Custom:** any column prefixed `custom_` is preserved in `custom_fields_jsonb`
-
-**Validation (client-side preview before insert):**
-- Email regex + dedupe within file
-- Reject rows with empty required cols, show line numbers
-- Cap: 5,000 rows per upload (Solo plan), 50,000 (Team)
-- Show 5-row preview with parsed fields before commit
-
-On commit: bulk insert prospects, then emit one `prospect.uploaded` event per row.
+**Full wizard (deferred):** the original 4-step linear flow with Gmail/Outlook OAuth as step 2. When send automation is added (re-adding §13), the setup page expands to include the OAuth flow.
 
 ---
 
-## 12. Approval UI
+## 11. Prospect input — **STRIPPED (v1.2)**
 
-Single table view, paginated 50/page. Columns:
-- Checkbox (bulk approve)
-- Prospect (name, company, role)
-- Subject + body preview (truncated, click to expand)
-- Overall score (color-coded: green ≥80, yellow 70–79, red <70)
-- Sub-scores (3 mini bars: ai-detection, genericness, personalization)
+**Bare-MVP form:** textarea on the dashboard. One prospect per line in the format:
+```
+email, first_name, company[, linkedin_url]
+```
+
+On submit: parse, dedup against existing prospects in the workspace, insert. Apify enrichment fires per prospect via Inngest (`prospect.uploaded` event), same as the original design. No per-row preview, no file upload widget, no error display beyond a line-count + "N rows imported, M skipped (dupes)" toast.
+
+**CSV upload (deferred):** the original column-validation + 5-row preview + 50k-row cap UI. Re-added if/when alpha testers need batch import. Until then, "paste 50 prospects at a time" works for founder-driven testing.
+
+---
+
+## 12. Approval UI — **STRIPPED (v1.2)**
+
+**Bare-MVP form:** single list view at `/dashboard`, paginated 25/page. Each row:
+- Prospect (name, company)
+- Subject line
+- Body preview (truncated, ~120 chars)
+- Overall score, color-coded (green ≥80, yellow 70–79, red <70)
 - Status badge
 
-**Expanded row drawer:**
-- Full email rendered as it will send
-- Per-judge breakdown with axis scores and red flags
-- Evidence: for genericness, similar corpus matches with snippets; for personalization, grounded references highlighted in body
-- Regenerate button (manual retry, counts against quota)
-- Edit-and-approve (small inline edits don't re-score)
-- Reject button (sets status=rejected, no send)
+Click a row to expand inline:
+- Full email rendered with the sender's name and from-email in a "To: {prospect.email}" header
+- Three sub-score bars (AI-Detection, Genericness, Personalization) with raw scores
+- **Copy to clipboard** button (copies the body)
+- **Approve** button (sets status='approved' — the only effect today is marking the row visually so the user knows they've already copy-pasted it)
+- **Reject** button (sets status='rejected')
 
-Bulk actions: Approve all visible, Reject all visible, Approve all with score ≥X.
+A separate tab/filter shows flagged generations (`status='flagged'` — the regen loop gave up after 3 retries). Surface the lowest sub-score so the user knows why it failed.
 
-Flagged generations (after 3 failed retries) appear in a separate tab with the lowest sub-score surfaced so the user knows why.
+**Deferred until send automation lands (re-adding §13):** per-judge evidence drawer (corpus matches, grounded references highlighted in body), bulk actions, regenerate button, edit-and-approve.
 
 ---
 
-## 13. Send flow
+## 13. Send flow — **DEFERRED (v1.2)**
 
-**Trigger:** user approval (single or bulk) emits `approval.granted` event.
+No automated sending in the bare MVP. The approval UI renders the email body with a Copy button; the user pastes into Gmail / their mail client manually. Approval just transitions `generations.status` from `needs_review` → `approved`. The `sends` table remains empty.
 
-**Rate limiting:** per `senders.daily_send_cap` (default 200, max 500 Gmail / 1000 Outlook). Inngest concurrency key `sender:{id}` with throttle. Drip schedule: sends staggered with random jitter 30–180 seconds between sends per sender.
+**Why deferred:** Gmail OAuth + Microsoft Graph + drip + jitter + per-sender concurrency is the largest single chunk of non-eval work in the original plan. The eval-quality question doesn't need it. Re-validating from real-world reply rate is the trigger to add it back.
 
-**Send path:**
-- Gmail: `users.messages.send` with raw RFC822
-- Outlook: `users/me/sendMail` with JSON payload
-- Capture `external_message_id` into `sends` row
-- On 401: refresh OAuth token, retry once
-- On 429: backoff per provider docs, mark `failed` after 3 retries
+**Re-add path:** the `senders` table already has `oauth_access_token_encrypted`, `oauth_refresh_token_encrypted`, `oauth_expires_at`, `daily_send_cap`, `sends_today`, `sends_today_reset_at` columns. The `generations.status` enum already includes `sending` and `sent`. The `sends` table exists and is empty. Adding the send flow requires:
+- Gmail OAuth flow in the setup page
+- An Inngest function on `approval.granted` that handles the send + token refresh + drip
+- A daily cron for `sends_today` reset
 
-**Daily counter reset:** Inngest cron at sender's local midnight (or UTC for MVP) resets `sends_today`.
+No schema changes. Estimated 4-5 days of work when we're ready.
 
 ---
 
@@ -515,29 +522,32 @@ All server actions check `auth.uid()` against `workspaces.owner_id` (or future m
 
 ---
 
-## 19. Build sequence
+## 19. Build sequence (v1.2 bare-MVP)
 
-Each step below becomes its own implementation plan (via `writing-plans` skill).
+Each step becomes its own implementation plan.
 
-1. Supabase project + Next.js + Inngest scaffolding + RLS skeleton
+1. ✅ Supabase + Next.js + Inngest scaffolding + RLS skeleton
 2. Corpus generator + scraper + embedder + validator
 3. AI-Detection judge + calibration test against corpus
-4. Genericness similarity over pgvector
+4. Genericness similarity over pgvector — **with positive direction** (closeness-to-human-corpus weighted 0.4)
 5. Personalization Depth judge
 6. Generation prompt + regeneration loop with feedback injection
-7. Onboarding wizard (workspace → sender OAuth → ICP → voice samples)
-8. Prospect CSV upload + parser + Apify enrichment with fallback
-9. Approval table UI with per-email score breakdown and evidence
-10. Gmail/Outlook send flow with drip + jitter rate limiting
+7. Setup page (ICP + voice samples + sender identity) — **stripped, single form, no OAuth**
+8. Prospect input (textarea paste) + Apify enrichment with CSV-only fallback — **stripped, no file-upload UI**
+9. Approval list UI (overall score + body preview + click-to-expand + Copy + Approve/Reject) — **stripped, no per-judge evidence drawer**
 
 Steps 3, 4, 5 are independent and can run in parallel after step 2.
 
+**Cut / deferred (was steps 10–11 in v1):**
+- Send flow with Gmail/Outlook OAuth + drip + jitter (§13)
+- Stripe Checkout + quota metering (§14)
+
 ---
 
-## 20. Cut from MVP (defer until customers ask)
+## 20. Cut from MVP
 
-**Cut to focus on the eval-quality question:**
-Stripe Checkout · quota metering · pricing tiers · cost-per-send tracking
+**Cut to focus on "can we generate good cold emails":**
+Stripe Checkout · quota metering · pricing tiers · cost-per-send tracking · Gmail/Outlook send automation · drip + jitter rate limiting · `sends` table population · onboarding wizard (replaced with single setup page) · CSV upload UI (replaced with textarea paste) · per-judge evidence drawer in approval UI · bulk approval actions · edit-and-approve · regenerate button on approval rows
 
 **Deferred until first paying customers exist:**
 Sequences · reply handling · CRM sync · LinkedIn channel · hallucination eval · ICP-fit eval · reply-likelihood model · vendor scorecards · A/B testing · voice cloning beyond prompt-sampling · SSO · custom rubrics · free tier · public benchmark report · open/click tracking · team membership beyond single owner

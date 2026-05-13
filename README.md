@@ -74,15 +74,14 @@ docs/superpowers/plans/      Implementation plans (one per build step)
 
 ## Build sequence
 
-1. ✅ Scaffolding + RLS (this plan)
+1. ✅ Scaffolding + RLS
 2. Corpus generator + embedder
 3. AI-Detection judge + calibration
-4. Genericness similarity (with positive direction via human corpus — see spec §8.2)
+4. Genericness judge (with positive direction via human corpus — see spec §8.2)
 5. Personalization Depth judge
 6. Generation prompt + regen loop
-7. Onboarding wizard
-8. CSV upload + Apify enrichment
-9. Approval UI
-10. Send flow
+7. Setup page (stripped — single form, no OAuth)
+8. Prospect input (textarea paste) + Apify enrichment
+9. Approval list UI (stripped — copy-to-clipboard, no send automation)
 
-Stripe billing + quota metering is **cut from the bare MVP** — re-added only if eval quality is validated and there's reason to charge. See spec §14.
+**Cut from bare MVP** (see spec §14, §13): Stripe billing + Gmail/Outlook send automation. Re-added when eval quality is validated and there's reason.

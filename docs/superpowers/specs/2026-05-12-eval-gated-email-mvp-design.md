@@ -1,8 +1,12 @@
 # Eval-Gated Email Generation MVP — System Spec
 
-**Status:** Design v1
+**Status:** Design v1.1 (bare-MVP scope, no billing)
 **Source:** `handoff.md` (initial commit 829090f)
-**Date:** 2026-05-12
+**Last updated:** 2026-05-13
+
+> **v1.1 scope cuts** (from v1, dated 2026-05-13):
+> - **Stripe billing + quota metering removed** (§14, §20). The MVP exists to answer "can the eval engine produce cold emails the founders would actually send." Billing is deferred until that question is answered yes.
+> - **Genericness judge gains a positive direction** (§8.2 — TBD when Step 4 lands): in addition to `distance from AI+template corpora`, score `closeness to human corpus` with a 0.4 weight. Addresses the "unique but bad" failure mode.
 
 ---
 
@@ -68,7 +72,7 @@ External:
   - Anthropic (Sonnet 4.6 generation, Haiku 4.5 judges)
   - OpenAI (text-embedding-3-small)
   - Apify (LinkedIn enrichment)
-  - Stripe (Checkout + webhook)
+  - Stripe (DEFERRED — see §14)
   - Sentry, PostHog
 ```
 
@@ -90,7 +94,7 @@ External:
 | Embeddings | OpenAI `text-embedding-3-small` | 1536 dim |
 | Email send | Gmail API + Microsoft Graph | OAuth per sender |
 | Enrichment | Apify (`dev_fusion/linkedin-profile-scraper`) | Cached 90d |
-| Billing | Stripe Checkout + webhook | Two tiers |
+| Billing | DEFERRED — see §14 | Re-added after eval quality is validated |
 | Errors | Sentry | Frontend + serverless |
 | Product analytics | PostHog | Event funnel, approval rates |
 | Secrets | Vercel env + pgcrypto for token-at-rest | App-level key from env |
@@ -426,23 +430,15 @@ Flagged generations (after 3 failed retries) appear in a separate tab with the l
 
 ---
 
-## 14. Billing
+## 14. Billing — **DEFERRED**
 
-**Tiers (set in Stripe Products):**
-| Tier | Price | Sends/mo | Senders | Prospects/upload |
-|---|---|---|---|---|
-| Solo | $300 | 2,000 | 1 | 5,000 |
-| Team | $1,500 | 15,000 | 5 | 50,000 |
+Billing is cut from the bare MVP. The MVP exists to answer one question — "can the eval engine produce cold emails the founders would actually send" — and Stripe + quota metering serves a different question ("can we charge for this") that we only ask once the first is answered yes.
 
-**Checkout:** Stripe-hosted Checkout, success URL returns user to `/billing/success` which polls webhook completion.
+**State of the data model:** the `workspaces` table retains `stripe_customer_id`, `plan`, `monthly_send_quota`, `monthly_sends_used`, `quota_reset_at` columns from the original schema. They are intentionally left in place so that re-adding billing later doesn't require a migration. For now: every workspace gets `plan = 'solo'` and `monthly_send_quota = 999999` at creation; the `send.email` flow does not check or increment these counters.
 
-**Webhook:** `checkout.session.completed` → update `workspaces.plan`, `monthly_send_quota`, set `quota_reset_at`. `customer.subscription.deleted` → downgrade to `free` (read-only).
+**When to re-add:** after 3-5 alpha users confirm the eval engine produces emails they'd send. At that point, "what would they pay" becomes a real product question, not a hypothetical.
 
-**Metering:** every successful `sends` row insert increments `workspaces.monthly_sends_used` in a transaction. When `>= monthly_send_quota`, the `send.email` Inngest function short-circuits with status `failed` and surfaces a quota-exhausted banner.
-
-**Quota reset:** Inngest daily cron checks `quota_reset_at`, resets `monthly_sends_used` to 0, advances `quota_reset_at` 30 days.
-
-**Cost-per-send target:** $0.02 (~$0.012 generation including 3 retries × ~70% cache, ~$0.005 judges, ~$0.003 enrichment amortized). Gross margin target ~85%.
+**Cost-per-send (informational, unchanged):** ~$0.02 per generation (generation + cache + judges + amortized enrichment).
 
 ---
 
@@ -453,7 +449,6 @@ Server actions handle all mutations. Public route handlers exist only for webhoo
 ```
 POST  /api/auth/google/callback          OAuth callback (sender connect)
 POST  /api/auth/microsoft/callback       OAuth callback
-POST  /api/webhooks/stripe               Stripe webhook
 POST  /api/webhooks/inngest              Inngest signature-verified endpoint
 GET   /api/prospects/preview-csv         Parse + validate, no insert
 ```
@@ -493,7 +488,7 @@ All server actions check `auth.uid()` against `workspaces.owner_id` (or future m
 - **OAuth tokens** encrypted at rest with `pgcrypto.pgp_sym_encrypt` keyed by `OAUTH_TOKEN_KEY` env var (rotated quarterly, dual-key decrypt window)
 - **RLS** enforced on every tenant table. Policies verified by `scripts/security/rls-test.ts` (attempts cross-workspace reads, expects 0 rows)
 - **Service-role key** never reaches the client; used only in Inngest function handlers and server actions
-- **CSRF:** Next.js server actions provide built-in CSRF; webhooks verify signatures (Stripe, Inngest)
+- **CSRF:** Next.js server actions provide built-in CSRF; webhooks verify signatures (Inngest)
 - **Rate limit on public endpoints:** Vercel WAF or Upstash Ratelimit on `/api/webhooks/*` and OAuth callbacks
 - **No PII in logs:** Sentry scrubbing rules strip `email`, `body`, `oauth_token*` from breadcrumbs
 
@@ -534,7 +529,6 @@ Each step below becomes its own implementation plan (via `writing-plans` skill).
 8. Prospect CSV upload + parser + Apify enrichment with fallback
 9. Approval table UI with per-email score breakdown and evidence
 10. Gmail/Outlook send flow with drip + jitter rate limiting
-11. Stripe Checkout + webhook + quota metering
 
 Steps 3, 4, 5 are independent and can run in parallel after step 2.
 
@@ -542,6 +536,10 @@ Steps 3, 4, 5 are independent and can run in parallel after step 2.
 
 ## 20. Cut from MVP (defer until customers ask)
 
+**Cut to focus on the eval-quality question:**
+Stripe Checkout · quota metering · pricing tiers · cost-per-send tracking
+
+**Deferred until first paying customers exist:**
 Sequences · reply handling · CRM sync · LinkedIn channel · hallucination eval · ICP-fit eval · reply-likelihood model · vendor scorecards · A/B testing · voice cloning beyond prompt-sampling · SSO · custom rubrics · free tier · public benchmark report · open/click tracking · team membership beyond single owner
 
 ---
@@ -561,7 +559,7 @@ Sequences · reply handling · CRM sync · LinkedIn channel · hallucination eva
 | Max retries | 3, then `flagged` |
 | Subject scoring | Subject scored within AI-Detection `opener` axis |
 | Apify actor | `dev_fusion/linkedin-profile-scraper`, 90-day cache |
-| Stripe enforcement | Hard-stop at quota, banner in UI, no soft overage |
+| Billing / quota enforcement | DEFERRED — see §14. Workspaces default to unlimited send quota in the bare MVP. |
 | Email tracking | Out of scope for MVP |
 
 ---

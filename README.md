@@ -84,4 +84,5 @@ docs/superpowers/plans/      Implementation plans (one per build step)
 8. CSV upload + Apify enrichment
 9. Approval UI
 10. Send flow
-11. Stripe checkout + quota
+
+Stripe billing + quota metering is **cut from the bare MVP** — re-added only if eval quality is validated and there's reason to charge. See spec §14.

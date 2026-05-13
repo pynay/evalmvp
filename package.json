@@ -1,0 +1,50 @@
+{
+  "name": "evalmvp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:generate": "drizzle-kit generate",
+    "db:apply": "bash -c 'set -a; source .env.local; set +a; for f in supabase/migrations/*.sql; do echo \"=== $f ===\"; psql \"$DATABASE_URL\" -v ON_ERROR_STOP=1 -f \"$f\"; done'",
+    "rls:test": "tsx scripts/security/rls-test.ts",
+    "smoke": "tsx scripts/smoke.ts",
+    "inngest:dev": "npx inngest-cli@latest dev -u http://localhost:3000/api/inngest"
+  },
+  "dependencies": {
+    "@supabase/ssr": "^0.5.2",
+    "@supabase/supabase-js": "^2.45.4",
+    "drizzle-orm": "^0.36.4",
+    "inngest": "^3.27.5",
+    "next": "15.5.18",
+    "postgres": "^3.4.5",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.3",
+    "autoprefixer": "^10.4.20",
+    "dotenv": "^17.4.2",
+    "drizzle-kit": "^0.28.1",
+    "eslint": "^9.14.0",
+    "eslint-config-next": "15.5.18",
+    "postcss": "^8.4.49",
+    "prettier": "^3.3.3",
+    "prettier-plugin-tailwindcss": "^0.6.8",
+    "supabase": "^1.219.2",
+    "tailwindcss": "^3.4.14",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.4"
+  }
+}

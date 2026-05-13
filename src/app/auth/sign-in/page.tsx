@@ -1,19 +1,38 @@
 'use client';
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 
 export default function SignIn() {
+  return (
+    <Suspense fallback={null}>
+      <SignInInner />
+    </Suspense>
+  );
+}
+
+function SignInInner() {
+  const params = useSearchParams();
+  const initialError = params.get('error') === 'auth_failed'
+    ? 'Sign-in link expired or invalid. Try again.'
+    : null;
   const [email, setEmail] = useState('');
   const [sent, setSent] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(initialError);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    setErrorMsg(null);
     const supabase = createClient();
     const { error } = await supabase.auth.signInWithOtp({
       email,
       options: { emailRedirectTo: `${window.location.origin}/auth/callback` },
     });
-    if (!error) setSent(true);
+    if (error) {
+      setErrorMsg(error.message);
+      return;
+    }
+    setSent(true);
   }
 
   if (sent) return <main className="p-8">Check your email for the magic link (or Inbucket at http://127.0.0.1:54324 for local dev).</main>;
@@ -33,6 +52,7 @@ export default function SignIn() {
         <button type="submit" className="w-full rounded bg-black px-4 py-2 text-white">
           Send magic link
         </button>
+        {errorMsg && <p className="text-sm text-red-600">{errorMsg}</p>}
       </form>
     </main>
   );

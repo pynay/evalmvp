@@ -2,11 +2,13 @@ import {
   pgTable, uuid, text, timestamp, integer, jsonb, numeric, customType,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
+import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
 // Custom types Drizzle doesn't ship natively
 const citext = customType<{ data: string }>({ dataType: () => 'citext' });
 const bytea = customType<{ data: Buffer }>({ dataType: () => 'bytea' });
+const int4range = customType<{ data: string }>({ dataType: () => 'int4range' });
 
 export const workspaces = pgTable('workspaces', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -48,6 +50,7 @@ export const icps = pgTable('icps', {
   name: text('name').notNull(),
   industry: text('industry').array().notNull().default(sql`'{}'`),
   roleKeywords: text('role_keywords').array().notNull().default(sql`'{}'`),
+  sizeRange: int4range('size_range'),
   geo: text('geo').array().notNull().default(sql`'{}'`),
   exclusions: text('exclusions').array().notNull().default(sql`'{}'`),
   valueProp: text('value_prop'),
@@ -83,7 +86,8 @@ export const generations = pgTable('generations', {
   prospectId: uuid('prospect_id').notNull().references(() => prospects.id, { onDelete: 'cascade' }),
   senderId: uuid('sender_id').notNull().references(() => senders.id, { onDelete: 'cascade' }),
   icpId: uuid('icp_id').references(() => icps.id, { onDelete: 'set null' }),
-  parentGenerationId: uuid('parent_generation_id'),
+  parentGenerationId: uuid('parent_generation_id')
+    .references((): AnyPgColumn => generations.id, { onDelete: 'set null' }),
   subject: text('subject'),
   body: text('body'),
   model: text('model'),

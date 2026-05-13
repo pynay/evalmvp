@@ -95,7 +95,7 @@ export const generations = pgTable('generations', {
   retryCount: integer('retry_count').notNull().default(0),
   status: text('status').notNull().default('pending'),
   overallScore: numeric('overall_score', { precision: 5, scale: 2 }),
-  approvedBy: uuid('approved_by'),
+  approvedBy: uuid('approved_by'), // FK to auth.users — managed in SQL migration (cross-schema)
   approvedAt: timestamp('approved_at', { withTimezone: true }),
   lastError: text('last_error'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

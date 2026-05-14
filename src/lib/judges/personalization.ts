@@ -1,4 +1,23 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { z } from 'zod';
+import type Anthropic from '@anthropic-ai/sdk';
+import { anthropic, HAIKU_MODEL } from '../anthropic';
+import { parseJson } from './parse-json';
 import type { Reference } from './types';
+import { PERSONALIZATION_VERSION, type PersonalizationOutput } from './types';
+
+export const personalizationSchema = z.object({
+  references: z.array(z.object({
+    snippet: z.string(),
+    grounded_in: z.string().nullable(),
+    specificity: z.enum(['high', 'med', 'low', 'generic']),
+  })),
+  generic_token_hits: z.array(z.string()),
+  grounded_ref_count: z.number().int().min(0),
+});
+
+const RUBRIC = readFileSync(resolve(process.cwd(), 'prompts/judges/personalization.md'), 'utf-8');
 
 /**
  * Deterministic scoring from the structured output the Personalization judge extracts.
@@ -35,3 +54,56 @@ export function computePersonalizationScore(
 
   return Math.max(0, Math.min(100, score));
 }
+
+export interface PersonalizationInput {
+  subject: string;
+  body: string;
+  enrichment: Record<string, unknown>;
+}
+
+export async function personalization(input: PersonalizationInput): Promise<PersonalizationOutput> {
+  const userMessage = `Email:
+Subject: ${input.subject}
+
+${input.body}
+
+Enrichment data:
+${JSON.stringify(input.enrichment, null, 2)}`;
+
+  const res = await anthropic().messages.create({
+    model: HAIKU_MODEL,
+    max_tokens: 1200,
+    system: [
+      { type: 'text', text: RUBRIC, cache_control: { type: 'ephemeral' } },
+    ],
+    messages: [{ role: 'user', content: userMessage }],
+  });
+
+  const raw = res.content
+    .filter((c): c is Anthropic.TextBlock => c.type === 'text')
+    .map((c) => c.text)
+    .join('');
+
+  const parsed = parseJson(raw, personalizationSchema);
+
+  const references = parsed.references.map((r) => ({
+    snippet: r.snippet,
+    groundedIn: r.grounded_in,
+    specificity: r.specificity,
+  }));
+
+  const score = computePersonalizationScore(
+    references,
+    parsed.generic_token_hits,
+    parsed.grounded_ref_count,
+  );
+
+  return {
+    references,
+    genericTokenHits: parsed.generic_token_hits,
+    groundedRefCount: parsed.grounded_ref_count,
+    score,
+  };
+}
+
+export { PERSONALIZATION_VERSION };

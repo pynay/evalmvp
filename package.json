@@ -20,6 +20,7 @@
     "corpus:build": "tsx scripts/corpus/build.ts",
     "corpus:validate": "tsx scripts/corpus/validate.ts",
     "corpus:smoke": "tsx scripts/corpus/build.ts --smoke",
+    "judge:calibrate-ai": "tsx scripts/judges/calibrate-ai-detection.ts",
     "inngest:dev": "npx inngest-cli@latest dev -u http://localhost:3000/api/inngest"
   },
   "dependencies": {

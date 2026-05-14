@@ -14,3 +14,6 @@ coverage/
 # Curated corpus seed data (not committed — founders paste real emails here)
 data/seed-human-emails.csv
 data/seed-template-emails.csv
+
+# Calibration runs (timestamped JSON reports — not committed)
+reports/*.json

@@ -25,8 +25,10 @@ export async function updateSession(request: NextRequest) {
 
   const isAuthRoute = request.nextUrl.pathname.startsWith('/auth');
   // Next.js strips route-group prefixes from URLs; '(authed)' never appears in the pathname.
-  // Add each protected path explicitly when new authed routes are added in later tasks.
-  const isAuthed = request.nextUrl.pathname.startsWith('/dashboard');
+  // Add each protected path explicitly when new authed routes are added.
+  const isAuthed =
+    request.nextUrl.pathname.startsWith('/dashboard') ||
+    request.nextUrl.pathname.startsWith('/setup');
 
   if (!user && isAuthed) {
     return NextResponse.redirect(new URL('/auth/sign-in', request.url));

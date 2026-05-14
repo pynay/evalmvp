@@ -35,11 +35,16 @@ export default async function Dashboard() {
 
       {ready && (
         <section className="rounded border border-neutral-200 p-4">
-          <h2 className="font-semibold">Generate</h2>
+          <h2 className="font-semibold">Prospects</h2>
           <p className="mt-2 text-sm text-neutral-600">
-            Prospect input UI is Step 8 — coming next. For now generate against fixture prospects via{' '}
-            <code className="rounded bg-neutral-100 px-1">pnpm gen:single</code>.
+            Upload prospects in batches of up to 10. Apify enrichment fires inline.
           </p>
+          <Link
+            href={'/prospects' as Route}
+            className="mt-4 inline-block rounded bg-black px-4 py-2 text-sm text-white"
+          >
+            Manage prospects
+          </Link>
         </section>
       )}
     </main>

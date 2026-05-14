@@ -28,7 +28,8 @@ export async function updateSession(request: NextRequest) {
   // Add each protected path explicitly when new authed routes are added.
   const isAuthed =
     request.nextUrl.pathname.startsWith('/dashboard') ||
-    request.nextUrl.pathname.startsWith('/setup');
+    request.nextUrl.pathname.startsWith('/setup') ||
+    request.nextUrl.pathname.startsWith('/prospects');
 
   if (!user && isAuthed) {
     return NextResponse.redirect(new URL('/auth/sign-in', request.url));

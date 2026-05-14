@@ -1,7 +1,11 @@
+// Bare-MVP v1.2: AI + human only, template skipped. The AI generator already
+// covers template-style patterns via its prompt variants. The human target
+// matches the example CSV until founders curate more (corpus is INSERT-only,
+// so growing it later is free — just edit data/seed-human-emails.csv and re-run).
 export const CORPUS_TARGETS = {
   ai: 500,
-  human: 200,
-  template: 100,
+  human: 5,
+  template: 0,
 } as const;
 
 // Smoke run: tiny sample to verify the pipeline end-to-end without burning API quota

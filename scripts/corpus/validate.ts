@@ -1,6 +1,6 @@
 import { config as loadEnv } from 'dotenv';
-loadEnv({ path: '.env.local' });
-loadEnv({ path: '.env' });
+loadEnv({ path: '.env.local', override: true });
+loadEnv({ path: '.env', override: true });
 
 import postgres from 'postgres';
 import { CORPUS_TARGETS } from './config';

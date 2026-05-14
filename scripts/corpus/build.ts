@@ -1,6 +1,9 @@
 import { config as loadEnv } from 'dotenv';
-loadEnv({ path: '.env.local' });
-loadEnv({ path: '.env' });
+// override: true — shell env may have empty strings (e.g. ANTHROPIC_API_KEY="" from
+// 1Password CLI integration) that dotenv's default "don't override" leaves in place,
+// silently breaking API auth. .env.local is the source of truth for local dev.
+loadEnv({ path: '.env.local', override: true });
+loadEnv({ path: '.env', override: true });
 
 import { existsSync } from 'node:fs';
 import { generateAi } from './generate-ai';

@@ -17,3 +17,7 @@ data/seed-template-emails.csv
 
 # Calibration runs (timestamped JSON reports — not committed)
 reports/*.json
+
+# Real-data fixtures (founders fill these in with their own voice samples and prospects)
+tests/fixtures/generation/sender.json
+tests/fixtures/generation/prospect.json

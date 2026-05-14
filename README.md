@@ -70,6 +70,25 @@ The build is idempotent in the sense that re-running will INSERT new rows (no de
 
 To resize: edit `CORPUS_TARGETS` in `scripts/corpus/config.ts`.
 
+## Judges (Step 3+)
+
+Three independent judges score every generated email before it gets queued for approval. Each judge is a pure function `(email) → { axisScores, overall, redFlags }`. The eval loop in Step 6 fans out the 3 judges in parallel and blends their `overall` scores at 0.4 / 0.3 / 0.3.
+
+**Step 3 — AI-Detection:** Haiku 4.5 scores 7 axes (opener, structure, hedging, CTA, vocabulary, punctuation, rhythm). Higher = more human. Rubric at `prompts/judges/ai-detection.md`.
+
+To calibrate against the corpus (after Step 2's corpus build):
+
+```bash
+pnpm judge:calibrate-ai
+```
+
+Cost ~$0.001 per corpus row × ~800 rows = ~$0.80 per full calibration. Writes a timestamped JSON report to `reports/ai-detection-<ts>.json` and exits 0 if discrimination meets the spec's targets (AI mean ≤30, human mean ≥70, overlap ≤10%).
+
+If discrimination is poor, the fixes (in order of effort):
+1. Edit `prompts/judges/ai-detection.md` (bump version), recalibrate.
+2. Expand corpus (raise `CORPUS_TARGETS` in `scripts/corpus/config.ts`, re-run `pnpm corpus:build`).
+3. Add more diverse ICP variants / prompt styles to `scripts/corpus/config.ts`.
+
 ## Schema source of truth
 
 - **DDL, RLS, triggers, extensions** live in `supabase/migrations/*.sql` (source of truth).
@@ -106,7 +125,7 @@ docs/superpowers/plans/      Implementation plans (one per build step)
 
 1. ✅ Scaffolding + RLS
 2. ✅ Corpus generator + embedder
-3. AI-Detection judge + calibration
+3. ✅ AI-Detection judge + calibration
 4. Genericness judge (with positive direction via human corpus — see spec §8.2)
 5. Personalization Depth judge
 6. Generation prompt + regen loop

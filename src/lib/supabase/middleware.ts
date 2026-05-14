@@ -29,7 +29,8 @@ export async function updateSession(request: NextRequest) {
   const isAuthed =
     request.nextUrl.pathname.startsWith('/dashboard') ||
     request.nextUrl.pathname.startsWith('/setup') ||
-    request.nextUrl.pathname.startsWith('/prospects');
+    request.nextUrl.pathname.startsWith('/prospects') ||
+    request.nextUrl.pathname.startsWith('/approval');
 
   if (!user && isAuthed) {
     return NextResponse.redirect(new URL('/auth/sign-in', request.url));

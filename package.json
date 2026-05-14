@@ -24,6 +24,7 @@
     "judge:calibrate-generic": "tsx scripts/judges/calibrate-genericness.ts",
     "judge:calibrate-personalization": "tsx scripts/judges/calibrate-personalization.ts",
     "gen:single": "tsx scripts/generation/generate-single.ts",
+    "gen:all": "tsx scripts/generation/generate-all.ts",
     "inngest:dev": "npx inngest-cli@latest dev -u http://localhost:3000/api/inngest"
   },
   "dependencies": {

@@ -11,6 +11,11 @@ supabase/.temp
 .vscode
 coverage/
 
+# Generated / tool-managed files
+next-env.d.ts
+tsconfig.tsbuildinfo
+skills-lock.json
+
 # Curated corpus seed data (not committed — founders paste real emails here)
 data/seed-human-emails.csv
 data/seed-template-emails.csv
@@ -21,3 +26,6 @@ reports/*.json
 # Real-data fixtures (founders fill these in with their own voice samples and prospects)
 tests/fixtures/generation/sender.json
 tests/fixtures/generation/prospect.json
+
+# Internal design docs — gitignored locally; pre-ignore commits still in history
+docs/superpowers/

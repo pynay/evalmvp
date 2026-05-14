@@ -113,6 +113,29 @@ Calibrated against `tests/fixtures/personalization-cases.json` — hand-crafted 
 
 **Formula is harsh on generic tokens by design:** one `{company}` or "leaders like you" subtracts 30. With only 1 grounded reference, that's enough to floor the score to 0. Step 6's regen-loop feedback should call out generic tokens by phrase so the generator can fix them.
 
+## Generation loop (Step 6)
+
+The eval-gated generation loop ties Steps 3-5 together. Given a prospect + sender + ICP, it generates a draft via Sonnet 4.6, scores it in parallel with the 3 judges, blends per spec §7.4 (`0.4 × AI-Detection + 0.3 × Genericness + 0.3 × Personalization`), and either queues the draft (overall ≥ 70) or regenerates with structured feedback (up to 3 retries; then flagged).
+
+**To run end-to-end on a fixture:**
+
+```bash
+# (Optional) curate your own voice samples + prospect; otherwise the example fixtures work
+cp tests/fixtures/generation/sender.example.json tests/fixtures/generation/sender.json
+cp tests/fixtures/generation/prospect.example.json tests/fixtures/generation/prospect.json
+
+# Run the loop
+pnpm gen:single
+```
+
+Cost ~$0.03–0.15 per run depending on retries. Writes the full result (all attempts + scores) to `reports/gen-single-<ts>.json`.
+
+**The generation prompt** lives at `prompts/generation/v1.md`. Edits to it should bump the version. Voice samples and ICP are injected at runtime.
+
+**The regen feedback** combines structured score deltas with a rule-based natural-language critique. The critique targets the lowest-scoring axis. Specific guidance for the personalization judge calls out generic tokens by phrase so the generator can fix them.
+
+**First run results (2026-05-14):** example fixture produced a passing draft on attempt 1 (overall=74, ai_detection=83, genericness=75, personalization=60). Three known issues to address in iteration: em-dash slipped past punctuation axis, generator hallucinated a "Grafana team" customer reference, and the prospect was a CTO while the ICP targets sales roles — the generator improvised. These are the next-iteration signals: tighten the hard-rules enforcement in AI-Detection, defer hallucination to Step 6.5+ (the deferred hallucination judge in spec §8), and tune the system prompt to bail out or flag when prospect.role doesn't match icp.roleKeywords.
+
 ## Schema source of truth
 
 - **DDL, RLS, triggers, extensions** live in `supabase/migrations/*.sql` (source of truth).
@@ -152,7 +175,7 @@ docs/superpowers/plans/      Implementation plans (one per build step)
 3. ✅ AI-Detection judge + calibration
 4. ✅ Genericness similarity over pgvector (v1.0; positive direction deferred)
 5. ✅ Personalization Depth judge
-6. Generation prompt + regen loop
+6. ✅ Generation prompt + regen loop
 7. Setup page (stripped — single form, no OAuth)
 8. Prospect input (textarea paste) + Apify enrichment
 9. Approval list UI (stripped — copy-to-clipboard, no send automation)

@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { Sender, Icp, Prospect } from './types';
 
-const TEMPLATE = readFileSync(resolve(process.cwd(), 'prompts/generation/v1.md'), 'utf-8');
+const TEMPLATE = readFileSync(resolve(process.cwd(), 'prompts/generation/v2.md'), 'utf-8');
 
 function renderVoiceSamples(samples: Array<{ subject: string; body: string }>): string {
   return samples

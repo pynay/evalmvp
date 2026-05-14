@@ -48,7 +48,7 @@ export interface GenerationResult {
   }>;
 }
 
-export const GENERATION_VERSION = 'v1';
+export const GENERATION_VERSION = 'v2';
 
 export const BLEND_WEIGHTS = {
   aiDetection: 0.4,
@@ -56,5 +56,5 @@ export const BLEND_WEIGHTS = {
   personalization: 0.3,
 } as const;
 
-export const DEFAULT_THRESHOLD = 70;
+export const DEFAULT_THRESHOLD = 85;
 export const MAX_RETRIES = 3;

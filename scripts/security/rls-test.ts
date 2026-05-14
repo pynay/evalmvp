@@ -12,8 +12,8 @@
  * RLS to create the synthetic auth.users rows.
  */
 import { config as loadEnv } from 'dotenv';
-loadEnv({ path: '.env.local' });
-loadEnv({ path: '.env' });  // fallback for CI environments
+loadEnv({ path: '.env.local', override: true });
+loadEnv({ path: '.env', override: true });  // fallback for CI environments
 
 import postgres from 'postgres';
 import { randomUUID } from 'node:crypto';

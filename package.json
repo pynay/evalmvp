@@ -22,6 +22,7 @@
     "corpus:smoke": "tsx scripts/corpus/build.ts --smoke",
     "judge:calibrate-ai": "tsx scripts/judges/calibrate-ai-detection.ts",
     "judge:calibrate-generic": "tsx scripts/judges/calibrate-genericness.ts",
+    "judge:calibrate-personalization": "tsx scripts/judges/calibrate-personalization.ts",
     "inngest:dev": "npx inngest-cli@latest dev -u http://localhost:3000/api/inngest"
   },
   "dependencies": {

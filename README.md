@@ -101,6 +101,18 @@ First run (2026-05-14, 242-row corpus): AI mean=0 (self-match expected), human m
 
 NOTE: positive-direction fix (closeness to human corpus, weighted 0.4) deferred until human corpus has ≥50 curated rows. See spec §8.2.
 
+**Step 5 — Personalization Depth (v1):** Haiku 4.5 extracts references from the email body, classifies each as high/med/low/generic specificity (high+med are "grounded" if traced to a specific enrichment field), and flags template-style tokens. A deterministic formula (spec §8.3) converts that structured output to 0–100: +20 per grounded high (cap 60), +10 per grounded med (cap 20), −30 per generic token, −40 if no grounded refs at all.
+
+To calibrate against hand-crafted test cases:
+
+```bash
+pnpm judge:calibrate-personalization
+```
+
+Calibrated against `tests/fixtures/personalization-cases.json` — hand-crafted (email, enrichment) pairs with expected score ranges. Cost ~$0.01 per run.
+
+**Formula is harsh on generic tokens by design:** one `{company}` or "leaders like you" subtracts 30. With only 1 grounded reference, that's enough to floor the score to 0. Step 6's regen-loop feedback should call out generic tokens by phrase so the generator can fix them.
+
 ## Schema source of truth
 
 - **DDL, RLS, triggers, extensions** live in `supabase/migrations/*.sql` (source of truth).
@@ -139,7 +151,7 @@ docs/superpowers/plans/      Implementation plans (one per build step)
 2. ✅ Corpus generator + embedder
 3. ✅ AI-Detection judge + calibration
 4. ✅ Genericness similarity over pgvector (v1.0; positive direction deferred)
-5. Personalization Depth judge
+5. ✅ Personalization Depth judge
 6. Generation prompt + regen loop
 7. Setup page (stripped — single form, no OAuth)
 8. Prospect input (textarea paste) + Apify enrichment

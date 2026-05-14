@@ -43,3 +43,20 @@ export interface GenericnessOutput {
 }
 
 export const GENERICNESS_VERSION = 'v1.0';
+
+export type Specificity = 'high' | 'med' | 'low' | 'generic';
+
+export interface Reference {
+  snippet: string;
+  groundedIn: string | null;
+  specificity: Specificity;
+}
+
+export interface PersonalizationOutput {
+  references: Reference[];
+  genericTokenHits: string[];
+  groundedRefCount: number;
+  score: number;  // 0-100, computed by us from the structured output
+}
+
+export const PERSONALIZATION_VERSION = 'v1';

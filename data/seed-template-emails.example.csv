@@ -1,0 +1,6 @@
+vendor,source,subject,body
+"Apollo","apollo.io/templates/sales","I noticed {company} expanded","Hi {first_name}, I noticed {company} expanded into {market} recently. We help companies like yours streamline {value_prop}. Worth a quick chat next week?"
+"Outreach","outreach.io/blog/cold-email-templates","Quick question about {company}","Hey {first_name}, hope this finds you well. I came across {company}'s recent {trigger_event} and wanted to reach out. We work with {role_keyword} leaders to {value_prop}. Open to a 15-minute conversation?"
+"Lemlist","lemlist.com/templates","Saw your post on {topic}","Hi {first_name}, I saw your recent post on {topic} and it resonated. We're working with similar {industry} companies to address {pain_point}. Would love to share what we've learned. Worth a quick chat or open to ideas?"
+"Reply","reply.io/cold-email-templates","Idea for {company}","{first_name}, I noticed your role at {company} and had an idea I think could be valuable. We help {industry} leaders {value_prop}. Could potentially save you {benefit}. Worth exploring?"
+"HubSpot","hubspot.com/sales/cold-email-templates","Helping {company} with {pain_point}","Hi {first_name}, I might be reaching out at a bad time, but I think we could help {company} with {pain_point}. We've worked with similar {industry} companies. Would you be open to a brief conversation?"

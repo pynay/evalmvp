@@ -89,6 +89,18 @@ If discrimination is poor, the fixes (in order of effort):
 2. Expand corpus (raise `CORPUS_TARGETS` in `scripts/corpus/config.ts`, re-run `pnpm corpus:build`).
 3. Add more diverse ICP variants / prompt styles to `scripts/corpus/config.ts`.
 
+**Step 4 — Genericness (v1.0):** pgvector cosine similarity over `email_corpus WHERE origin = 'ai'`. For each candidate's (opener / body / cta) segment, finds the nearest AI corpus match and scores 100 × (1 − similarity). Higher = more unique. No LLM call. Cost ~$0.0001 per email (embeddings only).
+
+To calibrate against the corpus:
+
+```bash
+pnpm judge:calibrate-generic
+```
+
+First run (2026-05-14, 242-row corpus): AI mean=0 (self-match expected), human mean=61, overlap=0%. All targets pass at the v1.0 bar.
+
+NOTE: positive-direction fix (closeness to human corpus, weighted 0.4) deferred until human corpus has ≥50 curated rows. See spec §8.2.
+
 ## Schema source of truth
 
 - **DDL, RLS, triggers, extensions** live in `supabase/migrations/*.sql` (source of truth).
@@ -126,7 +138,7 @@ docs/superpowers/plans/      Implementation plans (one per build step)
 1. ✅ Scaffolding + RLS
 2. ✅ Corpus generator + embedder
 3. ✅ AI-Detection judge + calibration
-4. Genericness judge (with positive direction via human corpus — see spec §8.2)
+4. ✅ Genericness similarity over pgvector (v1.0; positive direction deferred)
 5. Personalization Depth judge
 6. Generation prompt + regen loop
 7. Setup page (stripped — single form, no OAuth)

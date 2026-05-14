@@ -1,0 +1,26 @@
+{
+  "email": "pete@acme.com",
+  "firstName": "Pete",
+  "lastName": "Sloan",
+  "company": "Acme Observability",
+  "role": "CTO",
+  "enrichment": {
+    "headline": "CTO at Acme Observability · ex-Datadog, ex-Honeycomb",
+    "about": "I run engineering at Acme. Previously led the storage team at Honeycomb. Spend most of my time on observability infrastructure problems that other people don't think are problems yet.",
+    "recent_posts": [
+      {
+        "title": "Ditching Datadog for self-hosted Tempo: what we learned in 6 weeks",
+        "date": "2026-04-22",
+        "snippet": "Two weeks of dashboards no one looked at. Then the cardinality blow-up at week three. We rebuilt the schema, capped 14 high-churn labels, and started over."
+      },
+      {
+        "title": "Engineering hiring in late 2026",
+        "date": "2026-03-10",
+        "snippet": "Brought on Jen as VP Eng. We're 14 engineers and growing 3 a quarter."
+      }
+    ],
+    "tenure_months": 22,
+    "company_size": "30-50 employees, Series A",
+    "company_industry": "Observability / DevOps tooling"
+  }
+}

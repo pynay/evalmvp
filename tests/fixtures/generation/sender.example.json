@@ -1,0 +1,32 @@
+{
+  "name": "Pranay (example)",
+  "email": "pranay@example.com",
+  "voiceSamples": [
+    {
+      "subject": "About your latest hire",
+      "body": "Saw you brought Jen on as VP Eng. Worked with her at Linear in 2022 — she has a way of turning a vague platform vision into something six people can execute on tomorrow. Lucky to land her."
+    },
+    {
+      "subject": "Quick thought on your bonsai post",
+      "body": "Hey Marc — saw your post about the juniper. Tried wiring last winter and snapped a primary branch. What time of year do you find safest? Curious how you got that taper."
+    },
+    {
+      "subject": "Re: outbound channel test",
+      "body": "Sent 40 emails to RevOps leaders this week using the angle we discussed. 6 replies, 3 calls booked. The thing that worked: dropping the 'I noticed' opener entirely. Just stating the specific problem we'd discussed at the dinner."
+    },
+    {
+      "subject": "your dunning podcast episode",
+      "body": "Hey Dana, your episode with Tomas was the first explanation of dunning that didn't feel like a sales pitch. We do collections automation for B2B SaaS. If your stack is Stripe + HubSpot we can show you a 12% recovery lift in 4 weeks. Open to a Tuesday?"
+    },
+    {
+      "subject": "Sample 5 — comp post",
+      "body": "Pete — your team raised in April, doubled headcount, and the comp-plan post on LinkedIn mentioned you're rewriting variable comp from scratch. We built a comp tool for exactly this stage. Worth 20 minutes?"
+    }
+  ],
+  "icp": {
+    "industry": ["B2B SaaS"],
+    "roleKeywords": ["Head of Sales", "VP Sales", "RevOps"],
+    "valueProp": "cut sales-cycle time in half using eval-gated AI outbound",
+    "sizeRange": "Series A-B (20-100 employees)"
+  }
+}

@@ -1,0 +1,71 @@
+[
+  {
+    "name": "well-personalized email — 3 high grounded refs",
+    "expected_min": 50,
+    "expected_max": 80,
+    "subject": "your Tempo migration writeup",
+    "body": "Pete — your post about ditching Datadog for self-hosted Tempo was the first writeup I've read that didn't pretend the migration was painless. The 'two weeks of dashboards no one looked at' line is going to stick with me. We do schema-validation tooling that catches the kind of cardinality blow-up you ran into at week three. Worth a Tuesday at 2pm chat?",
+    "enrichment": {
+      "first_name": "Pete",
+      "headline": "Engineering at Acme",
+      "recent_posts": [
+        { "title": "Ditching Datadog for self-hosted Tempo", "snippet": "Two weeks of dashboards no one looked at..." }
+      ],
+      "tenure_months": 18
+    }
+  },
+  {
+    "name": "templated email — 2 generic tokens, 0 grounded refs",
+    "expected_min": 0,
+    "expected_max": 10,
+    "subject": "Quick question about {company}",
+    "body": "Hi {first_name}, I noticed your role at {company} and wanted to reach out. We help companies like yours streamline operations. Worth a quick chat?",
+    "enrichment": {
+      "first_name": "Sarah",
+      "company": "Acme",
+      "headline": "VP Sales at Acme"
+    }
+  },
+  {
+    "name": "mediocre — uses real prospect data but generically",
+    "expected_min": 10,
+    "expected_max": 35,
+    "subject": "Sales acceleration",
+    "body": "Hi Sarah, as a VP Sales at a growing SaaS company, you're probably looking for ways to accelerate your team's outbound. We work with leaders like you to shorten deal cycles. Open to a 15-minute chat?",
+    "enrichment": {
+      "first_name": "Sarah",
+      "company": "Acme",
+      "headline": "VP Sales at Acme",
+      "industry": "SaaS"
+    }
+  },
+  {
+    "name": "moderately personalized — 1 high + 1 med grounded refs",
+    "expected_min": 25,
+    "expected_max": 50,
+    "subject": "your team's GraphQL migration",
+    "body": "Hey Jen — saw the post about your team migrating from REST to GraphQL last quarter. We've shipped to engineering teams making the same move at companies your size. Worth 20 minutes?",
+    "enrichment": {
+      "first_name": "Jen",
+      "headline": "Engineering Manager at Acme",
+      "company_size": "200-500",
+      "recent_posts": [
+        { "title": "Lessons from our REST-to-GraphQL migration", "date": "2026-04-15" }
+      ]
+    }
+  },
+  {
+    "name": "well-personalized but with a generic token slip",
+    "expected_min": 15,
+    "expected_max": 45,
+    "subject": "the Series B + the comp post",
+    "body": "Hey {first_name} — your LinkedIn post last week about rewriting variable comp from scratch resonated. We built a comp tool for exactly this stage. Worth a chat?",
+    "enrichment": {
+      "first_name": "Marcus",
+      "headline": "Head of People at Acme",
+      "recent_posts": [
+        { "title": "Why we're rewriting variable comp from scratch", "date": "2026-05-08" }
+      ]
+    }
+  }
+]
